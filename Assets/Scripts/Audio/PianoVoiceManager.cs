@@ -514,6 +514,9 @@ public class PianoVoiceManager : MonoBehaviour
         float delaySeconds = 0f, bool ignorePedal = false)
     {
         if (!IsReady) return 0;
+        // 力度抬到聽得見的範圍。之後的每一步（取樣層、增益、替補、預熱比對）
+        // 都用抬過的值，不然輕音會用沒預熱過的取樣播。
+        velocity = PianoDynamics.Lift(velocity);
         if (!manifest.TryResolve(pitch, velocity, out PianoSampleZone zone,
                 out float pitchRatio, out float gain))
         {
@@ -1306,17 +1309,17 @@ public class PianoVoiceManager : MonoBehaviour
         prewarmRoutine = StartCoroutine(PrewarmClips(wanted));
     }
 
+    /// <summary>The velocity this note will be played at, so prewarm loads that sample.</summary>
+    /// <remarks>
+    /// Asks the hit site rather than repeating its rules. The copy that used to
+    /// live here never looked at <c>data.velocity</c> at all and skipped the
+    /// dynamic expansion, so every note whose velocity had been restored — most
+    /// of the library — was warmed one or more bands away from the clip that
+    /// actually sounds, and paid for it with a cold load on the first hit.
+    /// </remarks>
     private static int ChartVelocityOf(NoteData data)
     {
-        if (data.subNotes != null)
-        {
-            for (int i = 0; i < data.subNotes.Count; i++)
-            {
-                SubNoteData sub = data.subNotes[i];
-                if (sub != null && sub.velocity > 0) return Mathf.Clamp(sub.velocity, 1, 127);
-            }
-        }
-        return 80;
+        return PianoKeysound.ChartVelocity(data);
     }
 
     /// <summary>Adds the sample this note resolves to, and its velocity neighbours.</summary>
@@ -1324,6 +1327,8 @@ public class PianoVoiceManager : MonoBehaviour
         HashSet<string> seen, System.Collections.Generic.List<string> wanted)
     {
         if (pitch < 0) return;
+        // 和 NoteOn 用同一個抬升，鄰居也在抬過的域裡算——要預熱的是實際會播的那一層。
+        velocity = PianoDynamics.Lift(velocity);
         AddSample(pitch, velocity, seen, wanted);
         if (!playerTouch) return;
         // The bands are 8-15 wide, so ±16 reaches the neighbour on either side

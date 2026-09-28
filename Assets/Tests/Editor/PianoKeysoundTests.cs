@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using NUnit.Framework;
 using UnityEngine;
 
@@ -266,5 +266,69 @@ public class PianoKeysoundTests
                 Assert.Greater(ratio, 0f);
             }
         }
+    }
+
+    // ── 力度抬升（PianoDynamics） ──────────────────────────────────
+
+    [Test]
+    public void Lift_PutsTheQuietEndWhereTheBankStillSpeaks()
+    {
+        // 抬升前：力度 16 落在最輕那層（錄製峰值 −35.9 dBFS）再往下衰減，
+        // 蓋在歌曲底下等於沒有聲音。抬升後要進到聽得見的層。
+        Assert.AreEqual(PianoDynamics.MinSoundingVelocity, PianoDynamics.Lift(1));
+        Assert.AreEqual(48, PianoDynamics.Lift(16));
+        Assert.AreEqual(127, PianoDynamics.Lift(127), "最強的力度不動。");
+    }
+
+    [Test]
+    public void Lift_IsMonotonicSoPhrasingSurvives()
+    {
+        // 寫得比較大聲的音仍然比較大聲——不是把每顆都壓成一樣。
+        int previous = 0;
+        for (int velocity = 1; velocity <= 127; velocity++)
+        {
+            int lifted = PianoDynamics.Lift(velocity);
+            Assert.GreaterOrEqual(lifted, previous, $"velocity {velocity} 比前一個小");
+            Assert.GreaterOrEqual(lifted, PianoDynamics.MinSoundingVelocity);
+            Assert.LessOrEqual(lifted, 127);
+            previous = lifted;
+        }
+        Assert.Greater(PianoDynamics.Lift(100), PianoDynamics.Lift(40), "強弱對比還在。");
+    }
+
+    [Test]
+    public void Lift_ClampsWhateverItIsHanded()
+    {
+        Assert.AreEqual(PianoDynamics.MinSoundingVelocity, PianoDynamics.Lift(0));
+        Assert.AreEqual(PianoDynamics.MinSoundingVelocity, PianoDynamics.Lift(-5));
+        Assert.AreEqual(127, PianoDynamics.Lift(999));
+    }
+
+    [Test]
+    public void Lift_MovesSoftNotesOntoALouderLayerOfTheRealBank()
+    {
+        PianoSampleManifest manifest = PianoSampleManifest.Load();
+        if (manifest == null)
+        {
+            Assert.Ignore("Piano sample bank not rendered in this checkout.");
+        }
+
+        // 音量差在取樣本身（最輕的層錄到 −35.9 dBFS，最重的 −1.0），
+        // velocity_gain 只是層內相對自己參考力度的衰減，跨層比較沒有意義。
+        // 所以這裡驗的是「換到了更上面的層」。
+        Assert.Greater(BandIndexOf(manifest, PianoDynamics.Lift(16)),
+            BandIndexOf(manifest, 16), "力度 16 抬升後還留在同一個取樣層");
+        Assert.AreEqual(BandIndexOf(manifest, 127), BandIndexOf(manifest, PianoDynamics.Lift(127)),
+            "最強的力度不該被換層");
+    }
+
+    private static int BandIndexOf(PianoSampleManifest manifest, int velocity)
+    {
+        for (int i = 0; i < manifest.velocity_bands.Count; i++)
+        {
+            PianoVelocityBand band = manifest.velocity_bands[i];
+            if (velocity >= band.low_velocity && velocity <= band.high_velocity) return i;
+        }
+        return manifest.velocity_bands.Count - 1;
     }
 }
