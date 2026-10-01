@@ -848,6 +848,7 @@ public partial class SimpleCarouselSettings : MonoBehaviour
     public void ShowSettings()
     {
         if (settingsPanel == null) return;
+        UiSfx.Open();
 
         // Apply saved camera values before the preview camera's first frame.
         // GameplayRoot OnEnable may restore authored transforms, so apply
@@ -880,6 +881,7 @@ public partial class SimpleCarouselSettings : MonoBehaviour
     {
         if (settingsPanel != null)
         {
+            UiSfx.Close();
             settingsPanel.SetActive(false);
 
             if (hideSelectionPanelWhenOpen && SongSelectionManager.Instance != null)

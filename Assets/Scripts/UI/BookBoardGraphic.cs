@@ -83,6 +83,12 @@ public sealed class BookBoardGraphic : MaskableGraphic
     /// <summary>Leather, the recessed field, the paper block and the gilding.</summary>
     public void Set(Color leather, Color field, Color paper, Color gilt)
     {
+        // 輪播每交接一次就把五張卡的顏色整組重設一遍，而其中至少三張的難度根本
+        // 沒變。少了這道守衛，每一次交接都要為了把一模一樣的四個顏色再寫一次，
+        // 重建五張各約一千九百個頂點的網格 —— 這個檔案裡其他設定子本來就都先
+        // 擋一次，這一個是漏掉的。
+        if (this.leather == leather && this.field == field
+            && this.paper == paper && this.gilt == gilt) return;
         this.leather = leather;
         this.field = field;
         this.paper = paper;

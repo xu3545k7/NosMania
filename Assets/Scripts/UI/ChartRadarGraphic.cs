@@ -338,15 +338,31 @@ public sealed class ChartRadarGraphic : MaskableGraphic
 
     private static void AddLine(VertexHelper vh, Vector2 from, Vector2 to, float thickness, Color colour)
     {
+        // 兩側各羽化一像素：MSAA 是關的，硬邊的斜線會變成一階一階的梯子。
         Vector2 direction = to - from;
         if (direction.sqrMagnitude < 1e-4f) return;
-        Vector2 normal = new Vector2(-direction.y, direction.x).normalized * (thickness * 0.5f);
+        direction.Normalize();
+        Vector2 n = new Vector2(-direction.y, direction.x);
+        float core = Mathf.Max(0f, thickness * 0.5f - 0.5f);
+        float edge = core + 1f;
+        from -= direction * 0.5f;
+        to += direction * 0.5f;
+        Color clear = new Color(colour.r, colour.g, colour.b, 0f);
 
+        Band(vh, from - n * edge, from - n * core, to - n * core, to - n * edge, clear, colour);
+        if (core > 0f) Band(vh, from - n * core, from + n * core, to + n * core, to - n * core, colour, colour);
+        Band(vh, from + n * core, from + n * edge, to + n * edge, to + n * core, colour, clear);
+    }
+
+    /// <summary>四頂點的帶子：outer 給第 1、4 點，inner 給第 2、3 點。</summary>
+    private static void Band(VertexHelper vh, Vector2 a, Vector2 b, Vector2 c, Vector2 d,
+        Color outer, Color inner)
+    {
         int first = vh.currentVertCount;
-        AddVertex(vh, from - normal, colour);
-        AddVertex(vh, from + normal, colour);
-        AddVertex(vh, to + normal, colour);
-        AddVertex(vh, to - normal, colour);
+        AddVertex(vh, a, outer);
+        AddVertex(vh, b, inner);
+        AddVertex(vh, c, inner);
+        AddVertex(vh, d, outer);
         vh.AddTriangle(first, first + 1, first + 2);
         vh.AddTriangle(first + 2, first + 3, first);
     }

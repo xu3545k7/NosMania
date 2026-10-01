@@ -15,6 +15,10 @@ public static class ClassicalBookUITheme
     private static TMP_FontAsset japaneseFont;
     private static Sprite paperTextureSprite;
     private static Sprite woodTextureSprite;
+    // 深色表面另外一組：同一個場、放大過對比、均值搬到 Pivot。key 是
+    // 材質旗標加上 0.5 為一階的 gain，所以打錯一個數字不會炸出一堆貼圖。
+    private static readonly System.Collections.Generic.Dictionary<int, Sprite> darkSurfaceSprites
+        = new System.Collections.Generic.Dictionary<int, Sprite>();
     private static Sprite coverTextureSprite;
     private static Sprite clothTextureSprite;
     public static readonly Color Ink = new Color(0.16f, 0.105f, 0.065f, 1f);
@@ -34,7 +38,7 @@ public static class ClassicalBookUITheme
         RectTransform backdrop = AddRect(panel.transform, "ClassicalBookBackdrop", DarkWood,
             Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
         backdrop.SetAsFirstSibling();
-        ApplyTexture(backdrop, ResolveTextureSprite(true));
+        ApplyDarkSurface(backdrop.GetComponent<Image>(), DarkWood, Surface.Wood, 2.5f);
 
         AddCentered(backdrop, "ConcertVelvet", new Vector2(2320f, 1280f), Vector2.zero,
             new Color(0.115f, 0.025f, 0.028f, 0.96f));
@@ -70,7 +74,7 @@ public static class ClassicalBookUITheme
         header.alignment = TextAlignmentOptions.Center;
 
         TextMeshProUGUI subtitle = AddText(backdrop, "BookSubtitle", "—  SELECT MUSIC / MUSICAL SCORE ARCHIVE  —", 16f,
-            MutedInk, FontStyles.Italic);
+            MutedInk, FontStyles.Normal);
         SetRect(subtitle.rectTransform, new Vector2(0.5f, 1f), new Vector2(700f, 36f), new Vector2(0f, -127f));
         subtitle.characterSpacing = 3f;
         subtitle.alignment = TextAlignmentOptions.Center;
@@ -201,12 +205,14 @@ public static class ClassicalBookUITheme
             coverRect.offsetMin = Vector2.zero;
             coverRect.offsetMax = Vector2.zero;
             coverRect.SetSiblingIndex(Mathf.Min(2, root.childCount - 1));
-            AddOutline(cover.gameObject, primary ? Gold : MutedInk, new Vector2(3f, -3f));
+            EnsureCoverEdge(cover);
         }
         StyleText(title, ParchmentLight, primary ? 31f : 25f, FontStyles.Bold);
         StyleText(difficulty, primary ? Burgundy : MutedInk, primary ? 24f : 19f, FontStyles.Bold);
+        // 作者名不用斜體：中日文的字型沒有真正的斜體，TMP 只是把字幾何式地剪切
+        // 過去，筆畫的粗細和轉角全歪掉。層級由字級和顏色分（20/16、金／紙色）。
         StyleText(author, primary ? new Color(0.91f, 0.77f, 0.46f, 1f) : AgedPaper,
-            primary ? 20f : 16f, FontStyles.Italic);
+            primary ? 20f : 16f, FontStyles.Normal);
 
         if (title != null)
         {
@@ -286,7 +292,14 @@ public static class ClassicalBookUITheme
             rect.anchorMin = new Vector2(0.5f, 0.5f);
             rect.anchorMax = new Vector2(0.5f, 0.5f);
             rect.pivot = new Vector2(1f, 1f);
-            rect.sizeDelta = new Vector2(188f, 56f);
+            // 尺寸取自簾桿，和桿左邊那顆「前往練習模式」同寬同高。
+            //
+            // 這裡本來寫死 188x56，而
+            // <see cref="ClassicalSettingsBookmark"/> 每幀又把它改成簾桿的尺寸 ——
+            // 實際生效的是後者，所以 188 只是一個讀起來像真的騙人數字，而底下
+            // 那一排圖示和標籤的偏移量都是照它算的 —— 換到 290 寬的牌子上，
+            // 圖示走到最左、字漂在中間，中間讓出一大塊空白。
+            rect.sizeDelta = new Vector2(SelectionRail.ControlWidth, SelectionRail.ControlHeight);
             rect.localRotation = Quaternion.identity;
             rect.localScale = Vector3.one;
             rect.SetAsLastSibling();
@@ -318,8 +331,8 @@ public static class ClassicalBookUITheme
         RectTransform iconRect = iconTransform as RectTransform;
         iconRect.anchorMin = iconRect.anchorMax = new Vector2(0f, 0.5f);
         iconRect.pivot = new Vector2(0f, 0.5f);
-        iconRect.anchoredPosition = new Vector2(18f, 0f);
-        iconRect.sizeDelta = new Vector2(38f, 30f);
+        iconRect.anchoredPosition = new Vector2(26f, 0f);
+        iconRect.sizeDelta = new Vector2(46f, 38f);
         sliders.raycastTarget = false;
 
         Transform labelTransform = button.transform.Find("SettingsLabel");
@@ -336,15 +349,21 @@ public static class ClassicalBookUITheme
         label.gameObject.SetActive(true);
         label.text = Localize.T("設定", "设置", "Settings");
         label.alignment = TextAlignmentOptions.Center;
-        label.fontSize = 21f;
+        // 字級和簾桿上其他東西同一張表。
+        //
+        // 本來寫死 21，而桿上的標籤用的是
+        // <c>ClassicalType.Label</c>（這張畫布的參考高 1440，換算出來是 26.7）。
+        // 實測截圖：「前往練習模式」的字高 13 px，「設定」只有 10 px ——
+        // 同一排控制項裡只有它矮一截。
+        label.fontSize = ClassicalType.On(button, ClassicalType.Label);
         label.fontStyle = FontStyles.Bold;
         label.enableWordWrapping = false;
         label.raycastTarget = false;
         RectTransform labelRect = label.rectTransform;
         labelRect.anchorMin = Vector2.zero;
         labelRect.anchorMax = Vector2.one;
-        labelRect.offsetMin = new Vector2(59f, 3f);
-        labelRect.offsetMax = new Vector2(-12f, -3f);
+        labelRect.offsetMin = new Vector2(84f, 6f);
+        labelRect.offsetMax = new Vector2(-22f, -6f);
         ApplyLocalizedFont(label);
 
         ClassicalSettingsBookmark hover = button.GetComponent<ClassicalSettingsBookmark>();
@@ -728,11 +747,13 @@ public static class ClassicalBookUITheme
     {
         if (root.Find("CardScoreBackground") != null) return;
 
-        RectTransform score = AddRect(root, "CardScoreBackground",
-            primary ? new Color(0.22f, 0.095f, 0.052f, 1f) : new Color(0.14f, 0.07f, 0.042f, 1f),
+        Color scoreTint = primary
+            ? new Color(0.22f, 0.095f, 0.052f, 1f)
+            : new Color(0.14f, 0.07f, 0.042f, 1f);
+        RectTransform score = AddRect(root, "CardScoreBackground", scoreTint,
             Vector2.zero, Vector2.one, new Vector2(7f, 7f), new Vector2(-7f, -7f));
         score.SetAsFirstSibling();
-        ApplyTexture(score, ResolveTextureSprite(true));
+        ApplyDarkSurface(score.GetComponent<Image>(), scoreTint, Surface.Wood, 1f);
     }
 
     private static void ApplyTexture(RectTransform target, Sprite sprite)
@@ -745,85 +766,272 @@ public static class ClassicalBookUITheme
     }
 
     /// <summary>
-    /// The tiling surface under every panel: dark grain for the boards, laid and
-    /// foxed rag paper for the pages.
+    /// 每一塊面板底下那張會平鋪的表面：書板是暗色木紋，書頁是有簾紋和鏽點的棉紙。
     /// </summary>
     /// <remarks>
-    /// **Why it is seamless now.** It is drawn tiled, and plain Perlin noise does
-    /// not meet itself at the tile edge -- so every 192 pixels there was a hard
-    /// seam running the height of the page, which is the one artefact that says
-    /// "texture" out loud. <see cref="Tileable"/> blends the four wrapped copies
-    /// of the same field, which costs four samples and removes the grid.
+    /// **為什麼接得起來。** 它是鋪出來的，而 `Mathf.PerlinNoise` 在 u=0 和 u=1 取
+    /// 到的值不一樣。舊解法是把四份環繞副本交叉淡接，縫沒了但**對比隨位置塌陷**
+    /// （中央四份平均，變異數只剩 1/4）—— 所以鏽點全擠在晶格角落。現在底層換成
+    /// <see cref="SurfaceNoise"/> 的環繞晶格噪聲：精確週期、各處對比一致。
     ///
-    /// **Why the paper is no longer flat.** The old fibre held to a range of
-    /// about 0.88-1.00 -- under a page-sized tint that is a plain cream
-    /// rectangle. Real rag paper is unevenly beaten: clouds where the pulp
-    /// gathered, laid lines from the mould, and rust-coloured specks. The range
-    /// runs to 0.72 now, and the specks carry their own hue, so the paper has
-    /// something to look at up close as well as at arm's length.
+    /// **為什麼紙的振幅只有原來的六成。** 換了底層之後同一組權重的對比變成 2.2
+    /// 倍（實測標準差 0.0164 → 0.0357）。書頁和遊玩紙卡是目前唯一讀得出來是紙的
+    /// 表面，不該被翻倍 —— 收到 0.60 之後亮色 tint 上是 5.2 級（今天 4.0），是看得
+    /// 出差別但不會變成花崗岩的幅度。
     ///
-    /// Anything larger than a speck belongs in <see cref="AgedPaperGraphic"/>
-    /// instead: at this size it would repeat three or four times across one
-    /// page, and a repeated stain reads as wallpaper.
+    /// 比鏽點更大的東西屬於 <see cref="AgedPaperGraphic"/>：在這個尺寸下它一頁會
+    /// 重複三四次，而重複的污痕讀起來是壁紙。
     /// </remarks>
     private static Sprite ResolveTextureSprite(bool wood)
     {
         if (wood && woodTextureSprite != null) return woodTextureSprite;
         if (!wood && paperTextureSprite != null) return paperTextureSprite;
 
-        const int size = 256;
-        Texture2D texture = new Texture2D(size, size, TextureFormat.RGBA32, false, false)
+        Surface kind = wood ? Surface.Wood : Surface.Paper;
+        Sprite sprite = BuildSurfaceSprite(kind, 1f, MeanOf(kind));
+        if (wood) woodTextureSprite = sprite;
+        else paperTextureSprite = sprite;
+        return sprite;
+    }
+
+    /// <summary>一張深色面底下鋪的是什麼東西。</summary>
+    /// <remarks>
+    /// 以前只有兩種，而「皮」是拿木紋去充數的 —— 木紋的對比一放大，結算頁那本書
+    /// 就明白寫著它是一塊木板。皮和木在物理上是相反的兩種表面：木是**有方向**的
+    /// 年輪，皮是**沒有方向**的細胞脊。同一張貼圖裝不了兩個。
+    /// </remarks>
+    public enum Surface
+    {
+        Paper,
+        Wood,
+        Leather
+    }
+
+    private static float MeanOf(Surface kind)
+    {
+        switch (kind)
         {
-            name = wood ? "Classical Dark Wood Grain" : "Classical Score Paper Fiber",
+            case Surface.Wood: return WoodMean;
+            case Surface.Leather: return LeatherMean;
+            default: return PaperMean;
+        }
+    }
+
+    // 實測的場均值（`SurfaceNoise` 的晶格版、256 的 tile、下面這組權重）。放大對比
+    // 的時候要繞著它轉，不是繞著 0.5 轉 —— 繞錯了整個面的亮度就跟著跑掉。
+    private const float PaperMean = 0.8568f;
+    private const float WoodMean = 0.762993f;
+    private const float LeatherMean = LeatherSurface.Mean;
+    // 放大之後把均值搬到這裡。為什麼不留在原處：紙的均值是 0.914，往上只有 0.086
+    // 的餘裕，gain 一過 1.7 高光就被 clamp 切掉。搬到 0.55 之後兩邊都有空間，代價是
+    // 呼叫端的 tint 要乘回 Mean/Pivot 才能維持原來的亮度 —— 那一步在
+    // <see cref="ApplyDarkSurface"/> 裡。
+    private const float DarkPivot = 0.55f;
+
+    /// <summary>
+    /// 深色表面專用的同一張場，對比放大過、均值搬到 <see cref="DarkPivot"/>。
+    /// </summary>
+    /// <remarks>
+    /// **為什麼深色面需要另一張貼圖。** 貼圖乘上 tint 之後才是螢幕上的值，而深色的
+    /// tint 會把調變一起壓掉：0.12 的 tint 讓紙的 0.0214 標準差變成 8-bit 上的
+    /// **0.74 級** —— 整塊面板從最亮到最暗跨不到一個色階，那不是紋理，那是 dither。
+    ///
+    /// **為什麼不能直接乘。** `value * gain` 會把高光切掉（見 <see cref="DarkPivot"/>
+    /// 的註解）。這裡是繞著均值放大：`Pivot + (value - mean) * gain`。
+    ///
+    /// **為什麼不給 <see cref="GetPaperTextureSprite"/> 用。** <see cref="BookBoardGraphic"/>
+    /// 把同一張貼圖當 `mainTexture` 乘到皮、凹面、紙block 和鍍金四種頂點色上，而鍍金
+    /// 是 0.84 —— 均值搬到 0.55 之後那些頂點色要乘 1.66 才補得回來，鍍金就被夾掉了。
+    /// 放大過的貼圖只從 <see cref="ApplyDarkSurface"/> 走得到。
+    /// </remarks>
+    private static Sprite ResolveDarkSurfaceSprite(Surface kind, float gain)
+    {
+        gain = Mathf.Clamp(gain, 1f, 6f);
+        int step = Mathf.RoundToInt(gain * 2f);          // 0.5 一階
+        int key = (step << 2) | (int)kind;
+        if (darkSurfaceSprites.TryGetValue(key, out Sprite cached) && cached != null) return cached;
+
+        Sprite sprite = BuildSurfaceSprite(kind, step * 0.5f, DarkPivot);
+        darkSurfaceSprites[key] = sprite;
+        return sprite;
+    }
+
+    /// <summary>
+    /// 把一張深色面接上放大過的貼圖，並且把 tint 補回來。
+    /// </summary>
+    /// <remarks>
+    /// `mean_out = centre * tintNew` 必須等於今天的 `mean * tint`，所以 tint 要乘
+    /// `mean / Pivot`（紙 1.661、木 1.387）。少了這一步整個面會亮 39-66%。
+    ///
+    /// gain 怎麼挑：目標是最終 8-bit 標準差 4 級以上、零 clip。實測
+    /// `sd = fieldSd * gain * tint * (mean / Pivot) * 255`，所以 tint 越暗 gain 越大。
+    /// </remarks>
+    /// <summary>
+    /// 同一張放大過的貼圖，但給自繪網格用（`Image` 以外的 `Graphic`）。
+    /// </summary>
+    /// <remarks>
+    /// 貼圖會乘到**整個 mesh** 上，所以一個同時畫暗場和金邊的 graphic 不能有
+    /// `mainTexture`：金色 0.92 乘上均值 0.55 的貼圖是 0.51，金子會發黑。要用它的元件
+    /// 必須把金工拆成另一個沒有貼圖的 graphic —— 見 `PlaqueGraphic`。
+    ///
+    /// 頂點色要自己乘上 <see cref="DarkSurfaceLift"/>，和 <see cref="ApplyDarkSurface"/>
+    /// 對 `image.color` 做的是同一件事。
+    /// </remarks>
+    public static Texture DarkSurfaceTexture(Surface kind, float gain)
+    {
+        Sprite sprite = ResolveDarkSurfaceSprite(kind, gain);
+        return sprite != null ? sprite.texture : null;
+    }
+
+    /// <summary>
+    /// tint 要乘的倍率，才能讓平均亮度和放大之前一樣。給**本來就鋪著這張貼圖**的面。
+    /// </summary>
+    public static float DarkSurfaceLift(Surface kind)
+    {
+        return MeanOf(kind) / DarkPivot;
+    }
+
+    /// <summary>
+    /// 同上，但給**本來是純色、現在才補上貼圖**的面。
+    /// </summary>
+    /// <remarks>
+    /// 兩者差一個材質均值，而且差很多（皮是 0.81，所以用錯會暗 19%）。
+    ///
+    /// 鋪著貼圖的面，它的「改之前」是 `tint × 材質均值`；純色的面，它的「改之前」就
+    /// 是 `tint`。放大過的貼圖均值是 <see cref="DarkPivot"/>，所以要回到 `tint` 得乘
+    /// `1 / DarkPivot`，回到 `tint × 均值` 才是乘 `均值 / DarkPivot`。
+    /// </remarks>
+    public static float DarkSurfaceFlatLift => 1f / DarkPivot;
+
+    public static void ApplyDarkSurface(Image image, Color tint, Surface kind, float gain)
+    {
+        if (image == null) return;
+        image.sprite = ResolveDarkSurfaceSprite(kind, gain);
+        image.type = Image.Type.Tiled;
+        float lift = MeanOf(kind) / DarkPivot;
+        image.color = new Color(tint.r * lift, tint.g * lift, tint.b * lift, tint.a);
+    }
+
+    private static Sprite BuildSurfaceSprite(Surface kind, float gain, float centre)
+    {
+        const int size = 256;
+        Texture2D texture = new Texture2D(size, size, TextureFormat.RGBA32, true, false)
+        {
+            name = kind.ToString() + " Surface x" + gain.ToString("0.0"),
             wrapMode = TextureWrapMode.Repeat,
-            filterMode = FilterMode.Bilinear,
+            filterMode = FilterMode.Trilinear,
+            anisoLevel = 4,
             hideFlags = HideFlags.DontSave
         };
+        // 皮不是逐像素的閉式函式 —— 它的摺痕是一整張場的分水線，要先烤。快取的是
+        // **場**不是 Sprite：gain 只是事後的線性變換，錯層的話第二個 gain 會把整個分
+        // 水嶺重解一次。
+        float[] leather = kind == Surface.Leather ? LeatherSurface.Field() : null;
+        if (leather != null && leather.Length != size * size) kind = Surface.Wood;
+        float mean = MeanOf(kind);
         Color[] pixels = new Color[size * size];
         for (int y = 0; y < size; y++)
         {
             for (int x = 0; x < size; x++)
             {
-                float broad = Tileable(x, y, 0.022f, 4.1f, size);
-                float fine = Tileable(x, y, 0.115f, 8.3f, size);
-                if (wood)
+                float u = x / (float)size;
+                float v = y / (float)size;
+                if (kind == Surface.Wood)
                 {
-                    float grain = Mathf.Sin((x + broad * 24f) * 0.13f) * 0.5f + 0.5f;
-                    float value = Mathf.Clamp01(0.56f + broad * 0.23f + fine * 0.07f + grain * 0.09f);
+                    float value = Mathf.Clamp01(centre + (WoodValue(u, v) - mean) * gain);
+                    pixels[y * size + x] = new Color(value, value * 0.86f, value * 0.72f, 1f);
+                }
+                else if (kind == Surface.Leather)
+                {
+                    float value = Mathf.Clamp01(centre + (leather[y * size + x] - mean) * gain);
+                    // 色相比照它取代掉的木紋，所以換的是花樣不是顏色。
                     pixels[y * size + x] = new Color(value, value * 0.86f, value * 0.72f, 1f);
                 }
                 else
                 {
+                    float broad = SurfaceNoise.Lattice(x, y, 0.022f, 41, size);
+                    float fine = SurfaceNoise.Lattice(x, y, 0.115f, 83, size);
                     // 雲：紙漿聚散不勻，這是最大片的那一層。
-                    float cloud = Tileable(x, y, 0.0085f, 21.7f, size);
-                    // 簾紋：抄紙的簾子壓出來的細橫線，很淡，但少了它紙沒有方向。
-                    float laid = Mathf.Sin(y * 0.62f + broad * 2.2f) * 0.5f + 0.5f;
+                    float cloud = SurfaceNoise.Lattice(x, y, 0.0085f, 217, size);
+                    // 簾紋：抄紙的簾子壓出來的細橫線。0.613592 = 25 個整數週期 / 256
+                    // （原本 0.62 是 25.26 個，橫向接縫差 94°）。
+                    float laid = Mathf.Sin(y * 0.613592f + broad * 2.2f) * 0.5f + 0.5f;
                     // 纖維：斜著走的短纖，靠兩個不同頻率的雜訊相乘挑出來。
-                    float fibre = Mathf.Clamp01(fine * Tileable(x + y, y - x, 0.075f, 33.4f, size) * 2.1f);
+                    float fibre = Mathf.Clamp01(fine * SurfaceNoise.Lattice(x + y, y - x, 0.075f, 334, size) * 2.1f);
 
-                    float value = 0.965f - cloud * 0.16f - laid * 0.028f - fibre * 0.075f
-                                  + broad * 0.045f;
-                    value = Mathf.Clamp01(value);
-                    Color tone = new Color(value, value * 0.982f, value * 0.928f, 1f);
+                    // 0.908343 不是 0.965：權重收到六成之後場的均值會從 0.857 漂到
+                    // 0.914，而書頁的 tint 是對著舊均值挑的，不壓回去整本書會亮 6.6%。
+                    float value = 0.908343f - cloud * 0.096f - laid * 0.0168f - fibre * 0.045f
+                                  + broad * 0.027f;
+                    value = Mathf.Clamp01(centre + (Mathf.Clamp01(value) - mean) * gain);
 
                     // 鏽點：稀疏、獨立、偏紅。它們是紙上唯一有顏色的東西。
-                    float spot = Tileable(x, y, 0.19f, 57.2f, size);
-                    if (spot > 0.80f)
+                    //
+                    // 三個數字都是量出來的：頻率 0.094（週期 24，每格 10.7px，所以一
+                    // 顆斑是 3-4px 而不是 mip 鏈會吃掉的 1px 點）、門檻 0.97（覆蓋
+                    // 0.25%；晶格場恢復原始分布之後舊的 0.80 會打中 9.9%）。
+                    //
+                    // 而且它要畫在放大**之後**：鏽點在場裡是 15% 的壓暗，gain 4 會把
+                    // 它變成 60% 的破洞。改成乘法加色相位移，所以每一個 gain 下的斑
+                    // 深淺一致。
+                    float g = 0.982f;
+                    float b = 0.928f;
+                    float spot = SurfaceNoise.Lattice(x, y, 0.094f, 572, size);
+                    if (spot > 0.97f)
                     {
-                        float bite = (spot - 0.80f) / 0.20f;
-                        tone = Color.Lerp(tone, new Color(0.62f, 0.44f, 0.26f, 1f), bite * 0.55f);
+                        float bite = (spot - 0.97f) / 0.03f;
+                        value *= 1f - bite * 0.149f;
+                        g = Mathf.Lerp(0.982f, 0.854f, bite);
+                        b = Mathf.Lerp(0.928f, 0.689f, bite);
                     }
-                    pixels[y * size + x] = tone;
+                    pixels[y * size + x] = new Color(value, value * g, value * b, 1f);
                 }
             }
         }
         texture.SetPixels(pixels);
-        texture.Apply(false, true);
+        texture.Apply(true, true);
         Sprite sprite = Sprite.Create(texture, new Rect(0f, 0f, size, size), new Vector2(0.5f, 0.5f), 100f);
         sprite.name = texture.name + " Sprite";
-        if (wood) woodTextureSprite = sprite;
-        else paperTextureSprite = sprite;
         return sprite;
+    }
+
+    /// <summary>龜裂的雜訊場。要取三次（本點和東、北各一 texel）算梯度。</summary>
+    private static float CrazeField(int x, int y, int size)
+    {
+        return SurfaceNoise.Lattice(x, y, 0.12f, 719, size) * 3.4f
+               + SurfaceNoise.Lattice(x, y, 0.44f, 55, size) * 0.7f;
+    }
+
+    /// <summary>木頭的剖面：窄的晚材線、寬的早材面、順木理的導管。</summary>
+    /// <remarks>
+    /// **為什麼不是正弦。** 原本是 `sin(x * 0.13)`，那是**對稱**的 —— 深色線和淺色
+    /// 面一樣寬。真的木頭剖面裡晚材是一條窄而硬的暗線，早材是一片寬而軟的亮面，
+    /// 而且年輪是彎的。對稱的正弦加上單八度的值噪聲（256 的 tile 上一顆 42.7px 的
+    /// 團塊）交叉出來是格子紋 —— 今天看不見是因為對比只有 8-bit 上的一級，一放大
+    /// 立刻變成瓦楞紙。
+    ///
+    /// 這個模型是練習室木牆（`PracticeRoomScreen.BuildWoodPixels`，全專案最好的程序
+    /// 材質）的環模型，去掉板縫 —— 這張貼圖會被鋪在各種尺寸上，板縫的間距會亂掉。
+    /// </remarks>
+    private static float WoodValue(float u, float v)
+    {
+        float warp = (SurfaceNoise.Fbm(u, v, 3, 2, 3) - 0.5f) * 0.40f
+                     + (SurfaceNoise.Fbm(u, v, 9, 5, 2) - 0.5f) * 0.09f;
+        float r = (u + warp) * 9f;                    // 9 個整數週期，所以接得回去
+        float t = r - Mathf.Floor(r);
+        float band = Mathf.Min(t, 1f - t);
+        float late = Mathf.Exp(-band * band * 180f);  // 晚材：窄、硬、暗
+        float growth = Mathf.Clamp01((t - 0.10f) / 0.62f);
+        growth = growth * growth * (3f - 2f * growth);
+        float grain = Mathf.Clamp01((1f - late) * (0.78f + growth * 0.22f));
+        // 導管：順著木理跑的細長孔，所以格子是 72x14 不是正方的。
+        //
+        // 72 不是 180。180 格鋪在 256 的 tile 上是一格 1.42 像素 —— 在 Nyquist 之下，
+        // 畫出來不是導管而是一片寬窄亂跳的硬邊直條（取樣不足的鋸齒，FFT 上別名到
+        // −76 剛好對得上）。72 是一格 3.56 像素，形狀才長得出來。
+        float pore = SurfaceNoise.Noise(u * 72f, v * 14f, 72, 14);
+        grain = Mathf.Clamp01(grain - Mathf.Max(0f, pore - 0.60f) * 1.10f);
+        return 0.60f + grain * 0.22f;
     }
 
     /// <summary>
@@ -858,11 +1066,12 @@ public static class ClassicalBookUITheme
 
         const int size = 128;
         const float threads = 26f;      // 一格裡幾根線
-        Texture2D texture = new Texture2D(size, size, TextureFormat.RGBA32, false, false)
+        Texture2D texture = new Texture2D(size, size, TextureFormat.RGBA32, true, false)
         {
             name = "Classical Ribbon Weave",
             wrapMode = TextureWrapMode.Repeat,
-            filterMode = FilterMode.Bilinear,
+            filterMode = FilterMode.Trilinear,
+            anisoLevel = 4,
             hideFlags = HideFlags.DontSave
         };
 
@@ -884,14 +1093,14 @@ public static class ClassicalBookUITheme
 
                 float value = 0.80f + over * 0.30f - (1f - under) * 0.10f;
                 // 織不勻：真的布每隔幾根就有一根粗一點。
-                value -= Tileable(x, y, 0.030f, 17.3f, size) * 0.09f;
+                value -= SurfaceNoise.Lattice(x, y, 0.030f, 173, size) * 0.09f;
                 value = Mathf.Clamp01(value);
                 pixels[y * size + x] = new Color(value, value * 0.995f, value * 0.985f, 1f);
             }
         }
 
         texture.SetPixels(pixels);
-        texture.Apply(false, true);
+        texture.Apply(true, true);
         clothTextureSprite = Sprite.Create(texture, new Rect(0f, 0f, size, size),
             new Vector2(0.5f, 0.5f), 100f);
         clothTextureSprite.name = texture.name + " Sprite";
@@ -926,11 +1135,12 @@ public static class ClassicalBookUITheme
         if (coverTextureSprite != null) return coverTextureSprite;
 
         const int size = 256;
-        Texture2D texture = new Texture2D(size, size, TextureFormat.RGBA32, false, false)
+        Texture2D texture = new Texture2D(size, size, TextureFormat.RGBA32, true, false)
         {
             name = "Classical Cover Card",
             wrapMode = TextureWrapMode.Repeat,
-            filterMode = FilterMode.Bilinear,
+            filterMode = FilterMode.Trilinear,
+            anisoLevel = 4,
             hideFlags = HideFlags.DontSave
         };
 
@@ -942,51 +1152,47 @@ public static class ClassicalBookUITheme
                 // 粗紋要細到一兩個像素才看得出是紙的顆粒；再加一層中頻的
                 // 斑，那是染料吃進紙裡不勻的地方。原本只有一層很淡的雲，遠看
                 // 就是一塊平的色塊。
-                float tooth = Tileable(x, y, 0.44f, 12.7f, size);
-                float grain = Tileable(x, y, 0.155f, 3.3f, size);
-                float mottle = Tileable(x, y, 0.046f, 61.1f, size);
-                float cloud = Tileable(x, y, 0.011f, 47.3f, size);
+                float tooth = SurfaceNoise.Lattice(x, y, 0.44f, 127, size);
+                float grain = SurfaceNoise.Lattice(x, y, 0.155f, 33, size);
+                float mottle = SurfaceNoise.Lattice(x, y, 0.046f, 611, size);
+                float cloud = SurfaceNoise.Lattice(x, y, 0.011f, 473, size);
 
                 // 龜裂：把雜訊場的等高線挑出來。三個高度，線就會分岔、交會。
                 // 頻率要高：龜裂是幾個像素一格的細網，不是幾十個像素一格的
                 // 大理石紋。低頻的等高線讀起來是地圖，不是老掉的漆面。
-                float field = Tileable(x, y, 0.155f, 71.9f, size) * 3.4f
-                              + Tileable(x, y, 0.36f, 5.5f, size) * 0.7f;
+                // 等高線的寬度要**以像素計**。原本是「場的值離 level 不到 0.022
+                // 就上色」—— 場的梯度是 0.236/px，所以那道帶的全寬是 0.19 像素，四個
+                // level 裡 0.55 更只打中 0.005% 的面積。整張龜裂網是量得出來的，看
+                // 不出來的。現在拿 ±1 texel 算梯度，把值域的距離換成像素距離，得到固
+                // 定 1.6px 的線。
+                float field = CrazeField(x, y, size);
+                float slope = Mathf.Max(1e-4f, Mathf.Sqrt(
+                    (CrazeField(x + 1, y, size) - field) * (CrazeField(x + 1, y, size) - field)
+                    + (CrazeField(x, y + 1, size) - field) * (CrazeField(x, y + 1, size) - field)));
                 float crack = 0f;
-                for (int level = 0; level < 4; level++)
+                for (int level = 0; level < 3; level++)
                 {
-                    float d = Mathf.Abs(field - (0.55f + level * 0.62f));
-                    if (d < 0.022f) crack = Mathf.Max(crack, 1f - d / 0.022f);
+                    // level 從實測的場範圍導出（0.159-4.033），不是寫死的 0.55 起跳 ——
+                    // 舊的四個 level 裡 0.55 只打中 0.005% 的面積，那一條等高線是死的。
+                    float target = 0.159f + (4.033f - 0.159f) * (level + 0.5f) / 3f;
+                    crack = Mathf.Max(crack, Mathf.Clamp01(1f - Mathf.Abs(field - target) / slope / 0.8f));
                 }
 
-                float value = 0.995f - cloud * 0.085f - mottle * 0.105f - grain * 0.065f
-                              - tooth * 0.075f - crack * 0.17f;
+                // 底紋的權重收到 0.65：晶格場的對比是舊 Perlin 的 2.2 倍，原權重會把
+                // 封面變成花崗岩。龜裂現在是看得見的，底不需要再搶戲。
+                float value = 0.995f - (cloud * 0.085f + mottle * 0.105f + grain * 0.065f
+                                        + tooth * 0.075f) * 0.65f - crack * 0.13f;
                 value = Mathf.Clamp01(value);
                 pixels[y * size + x] = new Color(value, value * 0.992f, value * 0.975f, 1f);
             }
         }
 
         texture.SetPixels(pixels);
-        texture.Apply(false, true);
+        texture.Apply(true, true);
         coverTextureSprite = Sprite.Create(texture, new Rect(0f, 0f, size, size),
             new Vector2(0.5f, 0.5f), 100f);
         coverTextureSprite.name = texture.name + " Sprite";
         return coverTextureSprite;
-    }
-
-    /// <summary>
-    /// Perlin noise that meets itself across the tile, by cross-fading the four
-    /// wrapped copies of the same field.
-    /// </summary>
-    private static float Tileable(float x, float y, float frequency, float offset, int size)
-    {
-        float u = Mathf.Repeat(x, size) / size;
-        float v = Mathf.Repeat(y, size) / size;
-        float a = Mathf.PerlinNoise(x * frequency + offset, y * frequency + offset);
-        float b = Mathf.PerlinNoise((x - size) * frequency + offset, y * frequency + offset);
-        float c = Mathf.PerlinNoise(x * frequency + offset, (y - size) * frequency + offset);
-        float d = Mathf.PerlinNoise((x - size) * frequency + offset, (y - size) * frequency + offset);
-        return a * (1f - u) * (1f - v) + b * u * (1f - v) + c * (1f - u) * v + d * u * v;
     }
 
     private static void AddPageCorners(RectTransform page)
@@ -1150,6 +1356,8 @@ public static class ClassicalBookUITheme
             name = accent ? "ClassicalPlateAccent" : "ClassicalPlate",
             hideFlags = HideFlags.HideAndDontSave,
             wrapMode = TextureWrapMode.Clamp,
+            // 九宮格**不要** mipmap：mip 層會跨過切片邊界混色，邊角會糊掉。沒有
+            // mip 的話 trilinear 和 aniso 都是空設定，所以維持 Bilinear。
             filterMode = FilterMode.Bilinear,
         };
 
@@ -1229,6 +1437,40 @@ public static class ClassicalBookUITheme
         return sprite;
     }
 
+    /// <summary>曲繪的金邊。見 CoverEdgeFit：uGUI 的 Outline 畫出來是封面自己。</summary>
+    /// <remarks>複製出來的卡片要自己再叫一次 —— 執行期的綁定不會跟著 Instantiate。</remarks>
+    internal static void EnsureCoverEdge(Image cover)
+    {
+        if (cover == null) return;
+        Transform parent = cover.rectTransform.parent;
+        if (parent == null) return;
+
+        Transform existing = parent.Find("~CoverEdge");
+        RectTransform rect;
+        if (existing != null) rect = existing as RectTransform;
+        else
+        {
+            var edgeObject = new GameObject("~CoverEdge", typeof(RectTransform),
+                typeof(CanvasRenderer), typeof(EdgeLightGraphic), typeof(CoverEdgeFit));
+            edgeObject.layer = cover.gameObject.layer;
+            rect = edgeObject.GetComponent<RectTransform>();
+            rect.SetParent(parent, false);
+        }
+        if (rect == null) return;
+
+        // 和曲繪同一個中心、緊接在它後面畫。
+        RectTransform coverRect = cover.rectTransform;
+        rect.anchorMin = rect.anchorMax = (coverRect.anchorMin + coverRect.anchorMax) * 0.5f;
+        rect.pivot = new Vector2(0.5f, 0.5f);
+        rect.anchoredPosition = Vector2.zero;
+        rect.SetSiblingIndex(Mathf.Min(coverRect.GetSiblingIndex() + 1, parent.childCount - 1));
+
+        var graphic = rect.GetComponent<EdgeLightGraphic>();
+        if (graphic != null) graphic.raycastTarget = false;
+        var fit = rect.GetComponent<CoverEdgeFit>();
+        if (fit != null) fit.Bind(cover, graphic);
+    }
+
     private static void AddOutline(GameObject target, Color color, Vector2 distance)
     {
         Outline outline = target.GetComponent<Outline>();
@@ -1238,7 +1480,7 @@ public static class ClassicalBookUITheme
         outline.useGraphicAlpha = true;
     }
 
-    private static void AddShadow(GameObject target, Color color, Vector2 distance)
+    internal static void AddShadow(GameObject target, Color color, Vector2 distance)
     {
         Shadow[] shadows = target.GetComponents<Shadow>();
         Shadow shadow = null;

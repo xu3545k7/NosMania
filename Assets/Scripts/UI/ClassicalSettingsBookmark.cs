@@ -56,8 +56,12 @@ public sealed class ClassicalSettingsBookmark : MonoBehaviour,
         Vector3 topRight = rect.parent.InverseTransformPoint(canvasCorners[2]);
         rect.anchorMin = rect.anchorMax = new Vector2(0.5f, 0.5f);
         rect.pivot = new Vector2(1f, 1f);
-        rect.anchoredPosition = (Vector2)topRight + new Vector2(-34f, -34f);
-        rect.sizeDelta = new Vector2(188f, 56f);
+        // 落在簾桿上，和桿左邊那顆「前往練習模式」同高同寬 —— 一排控制項只有一條
+        // 基線。尺寸取自 SelectionRail，不自己寫一份：兩邊各寫一份的話，日後改了桿
+        // 高就只有一邊會跟著動。
+        rect.anchoredPosition = (Vector2)topRight
+            + new Vector2(-SelectionRail.SideMargin, -SelectionRail.ControlTop);
+        rect.sizeDelta = new Vector2(SelectionRail.ControlWidth, SelectionRail.ControlHeight);
         rect.localRotation = Quaternion.identity;
         rect.localScale = Vector3.one * Mathf.Lerp(1f, 1.025f, glow);
     }

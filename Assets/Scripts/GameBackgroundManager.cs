@@ -73,6 +73,36 @@ public class GameBackgroundManager : MonoBehaviour
     private int _difficultyThemeLevel = 1;
     private RectTransform _classicalSongInfoPanel;
     private RectTransform _coverFrame;
+    /// <summary>資訊卡收起來了嗎。</summary>
+    /// <remarks>
+    /// **static 加 PlayerPrefs，兩個都要。** 每開一首曲就是一個新的
+    /// <see cref="GameBackgroundManager"/>，所以狀態不能放在實例上 —— 放了的話換一首曲
+    /// 就彈回來。static 活過換曲，PlayerPrefs 活過重開遊戲。
+    /// </remarks>
+    private const string CollapsedKey = "Nostalgia.Gameplay.SongInfoCollapsed";
+    private static int _infoCollapsedCache = -1;
+
+    private static bool InfoCollapsed
+    {
+        get
+        {
+            if (_infoCollapsedCache < 0)
+                _infoCollapsedCache = PlayerPrefs.GetInt(CollapsedKey, 0);
+            return _infoCollapsedCache != 0;
+        }
+        set
+        {
+            _infoCollapsedCache = value ? 1 : 0;
+            PlayerPrefs.SetInt(CollapsedKey, _infoCollapsedCache);
+            PlayerPrefs.Save();
+        }
+    }
+
+    private RectTransform _infoBody;
+    private CollapseArrowGraphic _infoArrow;
+    private DifficultyBadgeGraphic _difficultyBadge;
+    private TextMeshProUGUI _difficultyName;
+    private TextMeshProUGUI _difficultyLevel;
     private Canvas _classicalSongInfoOverlay;
     private RectTransform _songProgressKnob;
     private TextMeshProUGUI _songProgressTime;
@@ -254,6 +284,9 @@ public class GameBackgroundManager : MonoBehaviour
             _backgroundImageBaseColor = backgroundImage.color;
             _backgroundImageBaseColorCached = true;
         }
+        // 左右上角那一小塊布幕與木條。掛在背景圖旁邊，不是 HUD ——
+        // HUD 畫在所有東西上面，而音符是從畫面頂端掉下來的。
+        GameplayCornerDrape.Attach(backgroundImage);
         // Restore cached editor rects into runtime cache before other Start() calls run
         _songRectTransform = songImage != null ? songImage.GetComponent<RectTransform>() : null;
         if (songImage != null && detachSongImageFromLayouts)
@@ -301,8 +334,11 @@ public class GameBackgroundManager : MonoBehaviour
         Canvas rootCanvas = sourceCanvas != null ? sourceCanvas.rootCanvas : null;
         if (rootCanvas == null) return;
 
+        // **GraphicRaycaster 不能漏。** 這張畫布本來只放字和圖，所以沒人發現少了它；
+        // 現在上面有暫停鍵，而沒有 raycaster 的 Canvas 是按不到的 —— 按鈕本身看起來
+        // 完全正常，只是事件永遠到不了。
         GameObject overlayObject = new GameObject("ClassicalSongInfoOverlay", typeof(RectTransform),
-            typeof(Canvas), typeof(CanvasScaler));
+            typeof(Canvas), typeof(CanvasScaler), typeof(UnityEngine.UI.GraphicRaycaster));
         overlayObject.layer = 5;
         overlayObject.transform.SetParent(transform, false);
         RectTransform overlayRect = overlayObject.GetComponent<RectTransform>();
@@ -321,39 +357,29 @@ public class GameBackgroundManager : MonoBehaviour
         overlayScaler.screenMatchMode = CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
         overlayScaler.matchWidthOrHeight = 0.5f;
 
-        GameObject panelObject = new GameObject("ClassicalSongInfoPanel", typeof(RectTransform),
-            typeof(CanvasRenderer), typeof(Image), typeof(RectMask2D));
-        panelObject.layer = 5;
-        _classicalSongInfoPanel = panelObject.GetComponent<RectTransform>();
-        _classicalSongInfoPanel.SetParent(overlayObject.transform, false);
-        _classicalSongInfoPanel.anchorMin = new Vector2(0f, 1f);
-        _classicalSongInfoPanel.anchorMax = new Vector2(0f, 1f);
-        _classicalSongInfoPanel.pivot = new Vector2(0f, 1f);
-        // Keep the complete card inside the screen safe area. The former 650 px
-        // card intruded into the track; this is exactly three quarters as wide.
-        _classicalSongInfoPanel.anchoredPosition = new Vector2(40f, -28f);
-        // BPM reaches 228 px from the top; keep only a slim 14 px paper margin.
-        _classicalSongInfoPanel.sizeDelta = new Vector2(487.5f, 242f);
+        // 一張卡。
+        //
+        // **拆成三張試過，比較差。** 三塊紙各自帶框帶影，邊框的總量比內容還多，
+        // 而且卡與卡之間的縫在一個本來就很擠的角落裡只是更磎。一張長卡、內部靠間
+        // 距分區，讀起來安靜得多。
+        //
+        // 版面：左上暫停鍵 → 曲名 → 作者 → 難度牌，右邊一塊封面，底下一條進度。
+        // 右緣守在 552：再寬就侵到軌道上（舊的 650 就是這樣壞的）。
+        _classicalSongInfoPanel = MakeInfoCard(overlayObject.transform, "ClassicalSongInfoPanel",
+            new Vector2(40f, -28f), new Vector2(512f, 264f), true);
 
-        Image panel = panelObject.GetComponent<Image>();
-        panel.sprite = ClassicalBookUITheme.GetPaperTextureSprite();
-        panel.type = Image.Type.Tiled;
-        panel.pixelsPerUnitMultiplier = 0.72f;
-        panel.color = new Color(0.94f, 0.90f, 0.82f, 0.98f);
-        panel.raycastTarget = false;
-        Outline border = panelObject.AddComponent<Outline>();
-        border.effectColor = new Color(0.42f, 0.27f, 0.13f, 0.82f);
-        border.effectDistance = new Vector2(2f, -2f);
-        Shadow shadow = panelObject.AddComponent<Shadow>();
-        shadow.effectColor = new Color(0f, 0f, 0f, 0.62f);
-        shadow.effectDistance = new Vector2(8f, -8f);
+        // 內容包一層：收合就是把這一層關掉，兩顆鍵留在卡上。
+        //
+        // 逐個 SetActive 的話會和底下已經有的很多可見性判斷搶（沒曲繪、沒難度、
+        // HUD 整組隱藏）—— 收合只該管一件事，別人的判斷留在這一層裡面。
+        GameObject bodyObject = new GameObject("Body", typeof(RectTransform));
+        bodyObject.layer = 5;
+        _infoBody = bodyObject.GetComponent<RectTransform>();
+        _infoBody.SetParent(_classicalSongInfoPanel, false);
+        _infoBody.anchorMin = _infoBody.anchorMax = _infoBody.pivot = new Vector2(0f, 1f);
+        _infoBody.anchoredPosition = Vector2.zero;
+        _infoBody.sizeDelta = new Vector2(512f, 264f);
 
-        RectMask2D panelMask = panelObject.GetComponent<RectMask2D>();
-        panelMask.padding = Vector4.zero;
-        panelMask.softness = new Vector2Int(2, 2);
-
-        // 裝飾框是紙卡的**兄弟**而不是子物件：紙卡帶著 RectMask2D，掛進去的東西
-        // 會被裁在紙邊上，而那正好就是紋飾要待的地方。
         _difficultyFrame = DifficultyFrameGraphic.Attach(_classicalSongInfoPanel, 11f);
         ApplyDifficultyTheme(gameplayDifficultyText != null ? gameplayDifficultyText.text : null);
 
@@ -364,8 +390,10 @@ public class GameBackgroundManager : MonoBehaviour
             typeof(CanvasRenderer), typeof(Image));
         frameObject.layer = 5;
         _coverFrame = frameObject.GetComponent<RectTransform>();
-        _coverFrame.SetParent(_classicalSongInfoPanel, false);
-        SetPanelRect(_coverFrame, new Vector2(24f, -22f), new Vector2(CoverFrameLongEdge, CoverFrameLongEdge));
+        // 封面靠右：左邊是要**讀**的（曲名、難度），圖是讓你認出來的，不必先讀。
+        _coverFrame.SetParent(_infoBody, false);
+        SetPanelRect(_coverFrame, new Vector2(322f, -12f),
+            new Vector2(CoverFrameLongEdge, CoverFrameLongEdge));
 
         Image frameFill = frameObject.GetComponent<Image>();
         frameFill.color = new Color(0.985f, 0.972f, 0.90f, 1f);
@@ -391,9 +419,9 @@ public class GameBackgroundManager : MonoBehaviour
 
         if (_songTitleViewport != null)
         {
-            _songTitleViewport.SetParent(_classicalSongInfoPanel, false);
-            SetPanelRect(_songTitleViewport, new Vector2(220f, -22f), new Vector2(243f, 48f));
-            _songTitleOriginalSize = new Vector2(243f, 48f);
+            _songTitleViewport.SetParent(_infoBody, false);
+            SetPanelRect(_songTitleViewport, new Vector2(14f, -66f), new Vector2(300f, 40f));
+            _songTitleOriginalSize = new Vector2(300f, 40f);
             if (_songTitleFrontCanvas != null)
             {
                 Destroy(_songTitleFrontCanvas);
@@ -402,25 +430,22 @@ public class GameBackgroundManager : MonoBehaviour
         }
         if (_songAuthorViewport != null)
         {
-            _songAuthorViewport.SetParent(_classicalSongInfoPanel, false);
-            SetPanelRect(_songAuthorViewport, new Vector2(220f, -79f), new Vector2(243f, 32f));
-            _songAuthorOriginalSize = new Vector2(243f, 32f);
+            _songAuthorViewport.SetParent(_infoBody, false);
+            SetPanelRect(_songAuthorViewport, new Vector2(14f, -108f), new Vector2(300f, 26f));
+            _songAuthorOriginalSize = new Vector2(300f, 26f);
             if (_songAuthorFrontCanvas != null)
             {
                 Destroy(_songAuthorFrontCanvas);
                 _songAuthorFrontCanvas = null;
             }
         }
-        if (_difficultyViewport != null)
-        {
-            _difficultyViewport.SetParent(_classicalSongInfoPanel, false);
-            SetPanelRect(_difficultyViewport, new Vector2(220f, -121f), new Vector2(243f, 32f));
-            if (_difficultyFrontCanvas != null)
-            {
-                Destroy(_difficultyFrontCanvas);
-                _difficultyFrontCanvas = null;
-            }
-        }
+        // 舊的難度文字收起來：它還是唯一的資料來源（ApplyDifficultyTheme 要讀回去
+        // 剖名稱和等級），但畫面上改由難度牌上那兩個白字負責。
+        if (_difficultyViewport != null) _difficultyViewport.gameObject.SetActive(false);
+
+        BuildPauseButton(_classicalSongInfoPanel);
+        BuildCollapseButton(_classicalSongInfoPanel);
+        BuildDifficultyBadge(_infoBody);
 
         EnsureSongProgressBar();
 
@@ -442,6 +467,8 @@ public class GameBackgroundManager : MonoBehaviour
             bpmRect.SetAsLastSibling();
         }
 
+        ApplyInfoCollapsed();
+
         // From this point the cover's canonical rect is panel-local; update the
         // guard cache so legacy authored coordinates cannot pull it back out.
         CacheSongImageRect();
@@ -450,13 +477,14 @@ public class GameBackgroundManager : MonoBehaviour
 
     private void EnsureSongProgressBar()
     {
-        if (_classicalSongInfoPanel == null || _songProgressKnob != null) return;
+        if (_infoBody == null || _songProgressKnob != null) return;
 
         GameObject barObject = new GameObject("SongProgressBar", typeof(RectTransform));
         barObject.layer = 5;
         RectTransform barRect = barObject.GetComponent<RectTransform>();
-        barRect.SetParent(_classicalSongInfoPanel, false);
-        SetPanelRect(barRect, new Vector2(216f, -168f), new Vector2(247f, 48f));
+        barRect.SetParent(_infoBody, false);
+        // 時間在難度牌**底下**：兩個都是「現在這局」的資訊，縱著排才是一組。
+        SetPanelRect(barRect, new Vector2(14f, -208f), new Vector2(298f, 46f));
 
         GameObject timeObject = new GameObject("SongProgressTime", typeof(RectTransform),
             typeof(CanvasRenderer), typeof(TextMeshProUGUI));
@@ -532,7 +560,7 @@ public class GameBackgroundManager : MonoBehaviour
     }
 
     /// <summary>Longest edge of the framed thumbnail, mount included.</summary>
-    private const float CoverFrameLongEdge = 170f;
+    private const float CoverFrameLongEdge = 176f;
 
     /// <summary>Paper mount between the gilt edge and the artwork.</summary>
     private const float CoverMount = 5f;
@@ -558,6 +586,219 @@ public class GameBackgroundManager : MonoBehaviour
             ? new Vector2(inner, inner / aspect)
             : new Vector2(inner * aspect, inner);
         _coverFrame.sizeDelta = art + new Vector2(CoverMount * 2f, CoverMount * 2f);
+    }
+
+    /// <summary>
+    /// 一張資訊卡：紙、棕色的外框、落影，再加一道內縮的金級。
+    /// </summary>
+    /// <remarks>
+    /// 金級是內縮 6 的一個空框，不是把外框改成金色：兩條線一棕一金、間隢 6，
+    /// 卡才讀得出是「裱了邊的紙」而不是一個框。只有一條的話，小卡在遠一點看
+    /// 就是一塊色塊。
+    ///
+    /// <paramref name="mask"/> 只有曲名那張要：曲名太長時是跑馬燈，要裁在紙邊上。
+    /// </remarks>
+    /// <summary>
+    /// 卡的左上角：暫停。
+    /// </summary>
+    /// <remarks>
+    /// 放在這裡而不是畫面角落：遊玩中唯一可以按的東西就它，而眼睛已經會往這張
+    /// 卡看（曲名、難度都在上面）。另外掉到畫面角落的話，它就和分數、連擊歸到
+    /// 同一區，而那一區是看的不是按的。
+    /// </remarks>
+    private void BuildPauseButton(RectTransform card)
+    {
+        if (card == null || card.Find("PauseButton") != null) return;
+
+        GameObject buttonObject = new GameObject("PauseButton", typeof(RectTransform),
+            typeof(CanvasRenderer), typeof(UnityEngine.UI.Image), typeof(UnityEngine.UI.Button));
+        buttonObject.layer = 5;
+        RectTransform rect = buttonObject.GetComponent<RectTransform>();
+        rect.SetParent(card, false);
+        SetPanelRect(rect, new Vector2(14f, -12f), new Vector2(46f, 46f));
+
+        // 沒有底板也沒有框：卡上已經有一圈框了，再套一個小框只是兩條線搶同一件事。
+        // 圖本身只是點擊區 —— 完全透明的 Image 拿不到射線，所以留一點點 alpha。
+        UnityEngine.UI.Image plate = buttonObject.GetComponent<UnityEngine.UI.Image>();
+        plate.color = new Color(0f, 0f, 0f, 0.0001f);
+        plate.raycastTarget = true;
+
+        // 兩條竹。畫兩塊而不是放一個「‖」：字形的粗細和間距跟著字型走，
+        // 換一支字型這顆鍵就變了。
+        for (int side = -1; side <= 1; side += 2)
+        {
+            GameObject bar = new GameObject(side < 0 ? "BarLeft" : "BarRight",
+                typeof(RectTransform), typeof(CanvasRenderer), typeof(UnityEngine.UI.Image));
+            bar.layer = 5;
+            RectTransform barRect = bar.GetComponent<RectTransform>();
+            barRect.SetParent(rect, false);
+            barRect.anchorMin = barRect.anchorMax = barRect.pivot = new Vector2(0.5f, 0.5f);
+            barRect.anchoredPosition = new Vector2(side * 5.5f, 0f);
+            barRect.sizeDelta = new Vector2(5f, 20f);
+            UnityEngine.UI.Image barImage = bar.GetComponent<UnityEngine.UI.Image>();
+            // 深色：底下是淡色的紙，淺色的章在上面是看不見的。
+            barImage.color = new Color(0.20f, 0.12f, 0.075f, 1f);
+            barImage.raycastTarget = false;
+        }
+
+        buttonObject.GetComponent<UnityEngine.UI.Button>().onClick.AddListener(() =>
+        {
+            GamePauseManager manager = GamePauseManager.Instance;
+            if (manager == null) manager = FindAnyObjectByType<GamePauseManager>();
+            if (manager != null) manager.ShowPauseOverlay();
+        });
+    }
+
+    /// <summary>
+    /// 暫停鍵旁邊的收合鍵：把卡收成只剩兩顆鍵。
+    /// </summary>
+    /// <remarks>
+    /// 收起來之後箭頭翻成往下 —— 箭頭指的是「按下去會發生的事」，不是目前的狀態。
+    /// </remarks>
+    private void BuildCollapseButton(RectTransform card)
+    {
+        if (card == null || card.Find("CollapseButton") != null) return;
+
+        GameObject buttonObject = new GameObject("CollapseButton", typeof(RectTransform),
+            typeof(CanvasRenderer), typeof(UnityEngine.UI.Image), typeof(UnityEngine.UI.Button));
+        buttonObject.layer = 5;
+        RectTransform rect = buttonObject.GetComponent<RectTransform>();
+        rect.SetParent(card, false);
+        SetPanelRect(rect, new Vector2(62f, -12f), new Vector2(44f, 44f));
+
+        UnityEngine.UI.Image plate = buttonObject.GetComponent<UnityEngine.UI.Image>();
+        plate.color = new Color(0f, 0f, 0f, 0.0001f);
+        plate.raycastTarget = true;
+
+        GameObject arrowObject = new GameObject("Arrow", typeof(RectTransform),
+            typeof(CanvasRenderer), typeof(CollapseArrowGraphic));
+        arrowObject.layer = 5;
+        RectTransform arrowRect = arrowObject.GetComponent<RectTransform>();
+        arrowRect.SetParent(rect, false);
+        arrowRect.anchorMin = Vector2.zero;
+        arrowRect.anchorMax = Vector2.one;
+        arrowRect.offsetMin = Vector2.zero;
+        arrowRect.offsetMax = Vector2.zero;
+        _infoArrow = arrowObject.GetComponent<CollapseArrowGraphic>();
+        _infoArrow.color = new Color(0.20f, 0.12f, 0.075f, 1f);
+        _infoArrow.raycastTarget = false;
+
+        buttonObject.GetComponent<UnityEngine.UI.Button>().onClick.AddListener(() =>
+        {
+            InfoCollapsed = !InfoCollapsed;
+            ApplyInfoCollapsed();
+        });
+    }
+
+    /// <summary>把目前的收合狀態套到卡上。</summary>
+    private void ApplyInfoCollapsed()
+    {
+        bool collapsed = InfoCollapsed;
+        if (_infoBody != null) _infoBody.gameObject.SetActive(!collapsed);
+        if (_classicalSongInfoPanel != null)
+        {
+            // 兩顆鍵在 (14,-12) 和 (62,-12)、各 44 寬，所以收起來只要 120x68。
+            _classicalSongInfoPanel.sizeDelta = collapsed
+                ? new Vector2(120f, 68f) : new Vector2(512f, 264f);
+        }
+        // 裝飾框是卡的**兄弟**，尺寸在 Attach 的那一刻就固定了 —— 卡縮了它不會
+        // 跟，所以收起來之後會留一圈框在原地。兩顆鍵外面再套一圈難度色的框也沒意義，
+        // 直接收掉。
+        if (_difficultyFrame != null) _difficultyFrame.gameObject.SetActive(!collapsed);
+        if (_infoArrow != null) _infoArrow.PointsDown = collapsed;
+    }
+
+    /// <summary>
+    /// 難度牌：整塊都是難度色的漸層，名稱和等級都是白的，等級放大。
+    /// </summary>
+    private void BuildDifficultyBadge(RectTransform card)
+    {
+        if (card == null || _difficultyBadge != null) return;
+
+        GameObject badgeObject = new GameObject("DifficultyBadge", typeof(RectTransform),
+            typeof(CanvasRenderer), typeof(DifficultyBadgeGraphic));
+        badgeObject.layer = 5;
+        RectTransform rect = badgeObject.GetComponent<RectTransform>();
+        rect.SetParent(card, false);
+        SetPanelRect(rect, new Vector2(14f, -142f), new Vector2(176f, 60f));
+        _difficultyBadge = badgeObject.GetComponent<DifficultyBadgeGraphic>();
+        _difficultyBadge.raycastTarget = false;
+
+        _difficultyName = MakeBadgeLabel(rect, "Name", 17f, TextAlignmentOptions.MidlineLeft);
+        SetPanelRect(_difficultyName.rectTransform, new Vector2(14f, -8f), new Vector2(104f, 44f));
+
+        // 等級放大：這張卡上唯一一眼就要讀到的數字。
+        _difficultyLevel = MakeBadgeLabel(rect, "Level", 34f, TextAlignmentOptions.MidlineRight);
+        SetPanelRect(_difficultyLevel.rectTransform, new Vector2(96f, -6f), new Vector2(66f, 48f));
+    }
+
+    private static TextMeshProUGUI MakeBadgeLabel(RectTransform parent, string name,
+        float size, TextAlignmentOptions alignment)
+    {
+        GameObject labelObject = new GameObject(name, typeof(RectTransform),
+            typeof(CanvasRenderer), typeof(TextMeshProUGUI));
+        labelObject.layer = 5;
+        labelObject.GetComponent<RectTransform>().SetParent(parent, false);
+        TextMeshProUGUI label = labelObject.GetComponent<TextMeshProUGUI>();
+        label.fontSize = size;
+        label.fontStyle = FontStyles.Bold;
+        label.alignment = alignment;
+        label.color = Color.white;          // 顏色只由底板負責
+        label.raycastTarget = false;
+        label.textWrappingMode = TextWrappingModes.NoWrap;
+        label.overflowMode = TextOverflowModes.Overflow;
+        return label;
+    }
+
+    private static RectTransform MakeInfoCard(Transform parent, string name,
+        Vector2 position, Vector2 size, bool mask)
+    {
+        GameObject cardObject = new GameObject(name, typeof(RectTransform),
+            typeof(CanvasRenderer), typeof(UnityEngine.UI.Image));
+        cardObject.layer = 5;
+        RectTransform rect = cardObject.GetComponent<RectTransform>();
+        rect.SetParent(parent, false);
+        rect.anchorMin = rect.anchorMax = rect.pivot = new Vector2(0f, 1f);
+        rect.anchoredPosition = position;
+        rect.sizeDelta = size;
+
+        UnityEngine.UI.Image paper = cardObject.GetComponent<UnityEngine.UI.Image>();
+        paper.sprite = ClassicalBookUITheme.GetPaperTextureSprite();
+        paper.type = UnityEngine.UI.Image.Type.Tiled;
+        paper.pixelsPerUnitMultiplier = 0.72f;
+        paper.color = new Color(0.94f, 0.90f, 0.82f, 0.98f);
+        paper.raycastTarget = false;
+
+        UnityEngine.UI.Outline border = cardObject.AddComponent<UnityEngine.UI.Outline>();
+        border.effectColor = new Color(0.42f, 0.27f, 0.13f, 0.82f);
+        border.effectDistance = new Vector2(2f, -2f);
+        UnityEngine.UI.Shadow drop = cardObject.AddComponent<UnityEngine.UI.Shadow>();
+        drop.effectColor = new Color(0f, 0f, 0f, 0.58f);
+        drop.effectDistance = new Vector2(6f, -6f);
+
+        GameObject ruleObject = new GameObject("GiltRule", typeof(RectTransform),
+            typeof(CanvasRenderer), typeof(UnityEngine.UI.Image));
+        ruleObject.layer = 5;
+        RectTransform rule = ruleObject.GetComponent<RectTransform>();
+        rule.SetParent(rect, false);
+        rule.anchorMin = Vector2.zero;
+        rule.anchorMax = Vector2.one;
+        rule.offsetMin = new Vector2(6f, 6f);
+        rule.offsetMax = new Vector2(-6f, -6f);
+        UnityEngine.UI.Image ruleImage = ruleObject.GetComponent<UnityEngine.UI.Image>();
+        ruleImage.color = new Color(0f, 0f, 0f, 0f);       // 只要那圈框
+        ruleImage.raycastTarget = false;
+        UnityEngine.UI.Outline gilt = ruleObject.AddComponent<UnityEngine.UI.Outline>();
+        gilt.effectColor = new Color(0.72f, 0.55f, 0.24f, 0.55f);
+        gilt.effectDistance = new Vector2(1f, -1f);
+
+        if (mask)
+        {
+            UnityEngine.UI.RectMask2D clip = cardObject.AddComponent<UnityEngine.UI.RectMask2D>();
+            clip.padding = Vector4.zero;
+            clip.softness = new Vector2Int(2, 2);
+        }
+        return rect;
     }
 
     private static void SetPanelRect(RectTransform rect, Vector2 position, Vector2 size)
@@ -868,6 +1109,7 @@ public class GameBackgroundManager : MonoBehaviour
                         // hidden with the artwork or an empty mount is left behind.
                         if (_coverFrame != null)
                             _coverFrame.gameObject.SetActive(songImage.texture != null);
+
                     }
                 }
                 catch { }
@@ -988,7 +1230,9 @@ public class GameBackgroundManager : MonoBehaviour
             gameplayDifficultyText.gameObject.SetActive(!string.IsNullOrEmpty(gameplayDifficultyText.text));
             if (_difficultyViewport != null)
             {
-                _difficultyViewport.gameObject.SetActive(
+                // 難度牌接手之後這一個永遠不再開回來。它還是唯一的資料來源
+                // （ApplyDifficultyTheme 要從它的字串剖名稱和等級），只是不再上場。
+                _difficultyViewport.gameObject.SetActive(_difficultyBadge == null &&
                     _gameplayHudPresentationVisible && !string.IsNullOrEmpty(gameplayDifficultyText.text));
             }
             ApplyDifficultyTheme(gameplayDifficultyText.text);
@@ -1028,6 +1272,18 @@ public class GameBackgroundManager : MonoBehaviour
             gameplayDifficultyText.color = new Color(theme.r * 0.68f, theme.g * 0.68f,
                 theme.b * 0.68f, 1f);
         }
+
+        // 難度牌：整塊上色，名稱和等級都是白的。
+        //
+        // 名稱剖不出來的時候留空而不是填 caption：caption 可能是「Lv. 16~8」
+        // 這種還沒選的區間，整串塞進一個 104 寬的框裡只會被截成一堆雜訊。
+        if (_difficultyName != null)
+            _difficultyName.text = string.IsNullOrEmpty(parsedName)
+                ? string.Empty : parsedName.ToUpperInvariant();
+        if (_difficultyLevel != null)
+            _difficultyLevel.text = _difficultyThemeLevel > 0
+                ? _difficultyThemeLevel.ToString() : string.Empty;
+        if (_difficultyBadge != null) _difficultyBadge.Ink = theme;
 
         if (_difficultyFrame != null)
         {
@@ -2765,7 +3021,8 @@ public class GameBackgroundManager : MonoBehaviour
         {
             bool hasDifficulty = gameplayDifficultyText != null &&
                                  !string.IsNullOrEmpty(gameplayDifficultyText.text);
-            _difficultyViewport.gameObject.SetActive(visible && hasDifficulty);
+            _difficultyViewport.gameObject.SetActive(
+                _difficultyBadge == null && visible && hasDifficulty);
         }
     }
 

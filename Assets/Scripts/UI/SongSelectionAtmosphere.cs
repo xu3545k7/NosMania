@@ -9,13 +9,17 @@ using UnityEngine.UI;
 public sealed class SongSelectionAtmosphere : MonoBehaviour
 {
     private SelectionScoreGraphic score;
-    private SelectionFiligreeGraphic filigree;
     private SelectionHallLightGraphic hallLight;
     private SelectionSpotlightGraphic spotlight;
     private SelectionSmokeGraphic smoke;
     private SelectionDustGraphic dust;
     private RectTransform atmosphereRoot;
+    private RectTransform valanceRoot;
     private AspectFillRawImage roomImage;
+    private AspectFillRawImage roomFade;
+    private Coroutine roomFadeRoutine;
+    private Color colourFrom;
+    private float colourTime = -1f;
     private Texture2D classicalRoomTexture;
     private Texture2D practiceRoomTexture;
     private bool practiceRoomChecked;
@@ -23,6 +27,23 @@ public sealed class SongSelectionAtmosphere : MonoBehaviour
     private readonly Vector3[] canvasCorners = new Vector3[4];
     private Color currentColour = DifficultyVisualPalette.ForLevel(1);
     private Color targetColour = DifficultyVisualPalette.ForLevel(1);
+
+    /// <summary>
+    /// 簷幕自己那一層。它不在氛圍包裡，所以要排到哪裡由畫面決定。
+    /// </summary>
+    public RectTransform Valance => valanceRoot;
+
+    /// <summary>
+    /// 簷幕只在演奏會模式出現。
+    /// </summary>
+    /// <remarks>
+    /// 台口的簷幕講的是「演出」。練習模式背後是練習室，一塊天鵝絨掛在那裡是在
+    /// 說一件沒發生的事。它和房間照片同一個旗標，所以兩邊不會對不上。
+    /// </remarks>
+    public void SetValanceVisible(bool visible)
+    {
+        if (valanceRoot != null) valanceRoot.gameObject.SetActive(visible);
+    }
 
     public static SongSelectionAtmosphere Attach(GameObject panel)
     {
@@ -60,19 +81,63 @@ public sealed class SongSelectionAtmosphere : MonoBehaviour
         atmosphere.canvasRoot = canvas != null ? canvas.rootCanvas.transform as RectTransform : null;
         atmosphere.FitToRootCanvas();
         atmosphere.BuildLayers(root);
+        atmosphere.BuildValance(root);
         atmosphere.SetDifficulty(1, true);
         return atmosphere;
     }
 
     private void BuildLayers(RectTransform root)
     {
+        // 換房間用的那一層要貼在最底下：房間照片是 root 自己的 graphic，而子物
+        // 件一律畫在父物件之上，所以這一層放在所有裝飾底下、照片正上方。
+        roomFade = AddLayer<AspectFillRawImage>(root, "RoomCrossfade");
+        roomFade.rectTransform.SetSiblingIndex(0);
+        roomFade.color = new Color(1f, 1f, 1f, 0f);
+
         // 先加的排在後面（畫得比較底層）：譜紙貼在牆上，光打在它上面，塵埃最前。
         score = AddLayer<SelectionScoreGraphic>(root, "DriftingScore");
-        filigree = AddLayer<SelectionFiligreeGraphic>(root, "CornerFiligree");
         hallLight = AddLayer<SelectionHallLightGraphic>(root, "HallLight");
         spotlight = AddLayer<SelectionSpotlightGraphic>(root, "DifficultySpotlight");
         smoke = AddLayer<SelectionSmokeGraphic>(root, "GildedSmoke");
+
         dust = AddLayer<SelectionDustGraphic>(root, "FloatingDust");
+    }
+
+    /// <summary>
+    /// 簷幕：氛圍根的**兄弟**，不是它的子物件。
+    /// </summary>
+    /// <remarks>
+    /// **為什麼不能當氛圍的一層。** 氛圍根整包的 sibling index 幾乎在最底（只
+    /// 比舊的 ClassicalBookBackdrop 高一層），而 uGUI 是後面的兄弟畫在前面的兄弟
+    /// 上面 —— 所以場景裡作者擺的曲目卡、書本全部畫在布前面。實機上看到的
+    /// 是畫面正中央被挖掉一塊<b>直角矩形</b>：左右兩邊的垂幔和金邊跑到那條
+    /// 垂直線就被切斷，而卡的背後就是房間照片。簷幕的幾何裡沒有任何直角，
+    /// 那塊矩形一定是別人蓋上去的。
+    ///
+    /// 台口的簷幕本來就該在舞台上所有東西前面，所以它要跑到曲目卡之後。
+    /// 排序交給畫面（見 <c>SongSelectionManager.EnsureCategoryCarousel</c>）：分類
+    /// 列要壓在布上面，所以簷幕先 SetAsLastSibling、分類列再一次。
+    ///
+    /// 這一層不會蓋到簾桿上的控制項（前往練習模式、評分卡、設定），因為
+    /// <see cref="SelectionValanceGraphic"/> 的 topY 就從簾桿底下才開始畫，桿那一條它
+    /// 一筆都沒碰。
+    ///
+    /// rect 要和氛圍根一模一樣（含那 2% 外擴）—— 布的幾何拿
+    /// <c>r.height * (0.01f / 1.02f)</c> 反推畫布邊緣，尺寸一不對就歪了。
+    /// </remarks>
+    private void BuildValance(RectTransform root)
+    {
+        var host = new GameObject("ProsceniumValance",
+            typeof(RectTransform), typeof(CanvasRenderer), typeof(SelectionValanceGraphic));
+        host.layer = root.gameObject.layer;
+        valanceRoot = host.GetComponent<RectTransform>();
+        valanceRoot.SetParent(root.parent, false);
+        valanceRoot.anchorMin = root.anchorMin;
+        valanceRoot.anchorMax = root.anchorMax;
+        valanceRoot.pivot = root.pivot;
+        valanceRoot.anchoredPosition = root.anchoredPosition;
+        valanceRoot.sizeDelta = root.sizeDelta;
+        host.GetComponent<SelectionValanceGraphic>().raycastTarget = false;
     }
 
     private static T AddLayer<T>(RectTransform parent, string name) where T : Graphic
@@ -106,7 +171,7 @@ public sealed class SongSelectionAtmosphere : MonoBehaviour
     /// keeps the room it already had. A missing decoration is not worth a broken
     /// screen, and the mode's actual behaviour does not depend on it.
     /// </remarks>
-    public void SetRecitalRoom(bool recital)
+    public void SetRecitalRoom(bool recital, bool immediate = false)
     {
         if (roomImage == null) return;
         if (!practiceRoomChecked)
@@ -118,9 +183,68 @@ public sealed class SongSelectionAtmosphere : MonoBehaviour
         Texture2D wanted = recital && practiceRoomTexture != null
             ? practiceRoomTexture
             : classicalRoomTexture;
+        // 去重拿 roomImage.texture 比就夠了 —— 它在淡出開始前就已經寫成新的那張。
         if (wanted == null || roomImage.texture == wanted) return;
+
+        Texture previous = roomImage.texture;
         roomImage.texture = wanted;
         roomImage.UpdateUVRect();
+        if (roomFade == null || !isActiveAndEnabled || previous == null || immediate)
+        {
+            if (roomFade != null) roomFade.color = new Color(1f, 1f, 1f, 0f);
+            return;
+        }
+        if (roomFadeRoutine != null) StopCoroutine(roomFadeRoutine);
+        roomFade.texture = previous;
+        roomFade.UpdateUVRect();
+        roomFade.color = Color.white;
+        roomFadeRoutine = StartCoroutine(CrossfadeRoom(previous as Texture2D));
+    }
+
+    /// <summary>換房間：結果先定下來，淡出的是**舊的**那一張。</summary>
+    /// <remarks>
+    /// 這張照片是模式切換在畫面上的**全部**回饋 —— 沒有對話框、沒有說明文字。原本
+    /// 是 `roomImage.texture = wanted` 一行到底，於是照片啪一聲跳掉，而舞台燈那邊
+    /// 用 τ≈294ms 在後面慢慢追，看起來像兩件事各走各的。
+    ///
+    /// **為什麼是淡出舊的，不是淡入新的。** 按下開關的同一幀，`ToggleRecitalMode`
+    /// 會接著開啟練習室，而練習室的 `Awake` 會把 selectionPanel 關掉 —— 這一層就
+    /// 掛在它底下，協程當場被 Unity 殺掉，而且不會在重新啟用時續跑。如果「把結果
+    /// 寫進 roomImage」是放在迴圈**後面**，那一行永遠輪不到：房間會停在舊照片，上
+    /// 面還糊著一層淡到一半的新照片，而且每切換一次就更濃一點。
+    ///
+    /// 反過來做就不會有這個問題：新照片第一幀就是最終狀態，淡出層只是舊照片的殘
+    /// 影，中途被殺掉最多就是殘影留著 —— 而 OnDisable 會把它清掉。
+    ///
+    /// 260ms 比燈的 320ms 略快：房間先到位、燈跟上，讀起來是「燈跟著房間變」。
+    /// </remarks>
+    private System.Collections.IEnumerator CrossfadeRoom(Texture2D previous)
+    {
+        float t = 0f;
+        const float span = 0.26f;
+        while (t < 1f)
+        {
+            t += Time.unscaledDeltaTime / span;
+            float k = 1f - Mathf.Pow(1f - Mathf.Clamp01(t), 3f);
+            roomFade.color = new Color(1f, 1f, 1f, 1f - k);
+            // FitToRootCanvas 每幀在改 rect，兩層的裁切比例要各自跟上，不然淡的
+            // 過程中會看到照片跳一下。
+            roomFade.UpdateUVRect();
+            yield return null;
+        }
+        roomFade.color = new Color(1f, 1f, 1f, 0f);
+        roomFadeRoutine = null;
+    }
+
+    /// <summary>面板被收起來時，把淡出層清乾淨。</summary>
+    /// <remarks>
+    /// 協程會被 Unity 跟著 GameObject 一起停掉，而且不會續跑。殘影留在畫面上的話，
+    /// 下一次進來看到的是兩張房間疊在一起。
+    /// </remarks>
+    private void OnDisable()
+    {
+        roomFadeRoutine = null;
+        if (roomFade != null) roomFade.color = new Color(1f, 1f, 1f, 0f);
     }
 
     public void SetDifficulty(int level, bool immediate = false)
@@ -137,18 +261,38 @@ public sealed class SongSelectionAtmosphere : MonoBehaviour
         targetColour = string.IsNullOrWhiteSpace(difficultyName)
             ? DifficultyVisualPalette.ForLevel(level)
             : DifficultyVisualPalette.For(difficultyName, level);
-        if (immediate) currentColour = targetColour;
-        ApplyColour();
+
+        if (immediate)
+        {
+            currentColour = targetColour;
+            colourTime = -1f;
+            ApplyColour();
+            return;
+        }
+        colourFrom = currentColour;
+        colourTime = 0f;
     }
 
     private void Update()
     {
-        float blend = 1f - Mathf.Exp(-3.4f * Time.unscaledDeltaTime);
-        currentColour = Color.Lerp(currentColour, targetColour, blend);
+        // 燈光要有終點。原本是指數收斂：τ = 1/3.4 = 294ms，60fps 下每幀殘差
+        // ×0.945，收到相等門檻要 191 幀＝3.19 秒 —— 綠轉紅的途中那一大段髒橘色
+        // 就是這樣來的。
+        if (colourTime >= 0f)
+        {
+            colourTime += Time.unscaledDeltaTime;
+            float t = Mathf.Clamp01(colourTime / 0.32f);
+            currentColour = Color.Lerp(colourFrom, targetColour, 1f - Mathf.Pow(1f - t, 3f));
+            if (t >= 1f)
+            {
+                currentColour = targetColour;
+                colourTime = -1f;
+            }
+            ApplyColour();
+        }
         if (score != null) score.Advance(Time.unscaledDeltaTime);
         if (hallLight != null) hallLight.Advance(Time.unscaledDeltaTime);
         if (smoke != null) smoke.Advance(Time.unscaledDeltaTime);
-        ApplyColour();
     }
 
     private void LateUpdate()
@@ -176,12 +320,17 @@ public sealed class SongSelectionAtmosphere : MonoBehaviour
         atmosphereRoot.anchoredPosition = (Vector2)((min + max) * 0.5f);
         // Two percent overscan prevents fractional CanvasScaler edge seams.
         atmosphereRoot.sizeDelta = (Vector2)(max - min) * 1.02f;
+        // 簷幕是兄弟不是子物件，要自己跟上。
+        if (valanceRoot != null)
+        {
+            valanceRoot.anchoredPosition = atmosphereRoot.anchoredPosition;
+            valanceRoot.sizeDelta = atmosphereRoot.sizeDelta;
+        }
     }
 
     private void ApplyColour()
     {
         if (score != null) score.Tint = currentColour;
-        if (filigree != null) filigree.Tint = currentColour;
         if (hallLight != null) hallLight.Tint = currentColour;
         if (smoke != null) smoke.Tint = currentColour;
         if (spotlight != null) spotlight.Tint = currentColour;
@@ -258,6 +407,31 @@ internal sealed class AspectFillRawImage : RawImage
     }
 }
 
+/// <summary>
+/// 燈在簷幕後面：布擋住的那一段直接不畫。
+/// </summary>
+/// <remarks>
+/// **為什麼不是改 sibling order 就好。** 已經改過一輪（燈排到布前面 →
+/// 布排到燈前面 → 布再排到曲目卡前面），而實機上那道難度色的光錐一直
+/// 在布的輪廓裡。布的網格是密合的（八種畫布尺寸逐欄掃過，內部空洞 0
+/// 列），所以光不是“穿過”來的，是被當層畫在上面的。一直追“還有誰在上
+/// 面畫”是在追症狀；布後面那一段光本來就不該存在，源頭掉了就沒有東西
+/// 可以漏，不管排序怎麼變。
+/// </remarks>
+internal static class SelectionLightMask
+{
+    /// <summary>布的下緣在哪一條 y。</summary>
+    public static float Gate(Rect r) => r.yMax - SelectionValanceGraphic.CoverDepth(r);
+
+    /// <summary>這一點的光還剩幾成。0 = 在布後面，1 = 完全露出來。</summary>
+    /// <remarks>羽化一段是為了不要在下緣出現一條硬的光邊。</remarks>
+    public static float Fade(float y, float gate, float feather)
+    {
+        if (feather <= 0.001f) return y >= gate ? 0f : 1f;
+        return Mathf.SmoothStep(0f, 1f, Mathf.Clamp01((gate - y) / feather));
+    }
+}
+
 [RequireComponent(typeof(CanvasRenderer))]
 internal sealed class SelectionSpotlightGraphic : MaskableGraphic
 {
@@ -268,6 +442,7 @@ internal sealed class SelectionSpotlightGraphic : MaskableGraphic
         get => tint;
         set
         {
+            if (tint == value) return;      // 同色就不要重建網格
             tint = value;
             SetVerticesDirty();
         }
@@ -287,6 +462,8 @@ internal sealed class SelectionSpotlightGraphic : MaskableGraphic
     private void DrawCone(VertexHelper vh, Rect r, float bottomWidth, float strength)
     {
         const int bands = 12;
+        float gate = SelectionLightMask.Gate(r);
+        float feather = r.height * 0.05f;
         for (int i = 0; i < bands; i++)
         {
             float t0 = i / (float)bands;
@@ -295,8 +472,11 @@ internal sealed class SelectionSpotlightGraphic : MaskableGraphic
             float y1 = Mathf.Lerp(r.yMax, r.yMin + r.height * 0.05f, t1);
             float half0 = r.width * Mathf.Lerp(0.018f, bottomWidth, t0) * 0.5f;
             float half1 = r.width * Mathf.Lerp(0.018f, bottomWidth, t1) * 0.5f;
-            float a0 = Mathf.Sin(t0 * Mathf.PI) * strength;
-            float a1 = Mathf.Sin(t1 * Mathf.PI) * strength;
+            float a0 = Mathf.Sin(t0 * Mathf.PI) * strength
+                * SelectionLightMask.Fade(y0, gate, feather);
+            float a1 = Mathf.Sin(t1 * Mathf.PI) * strength
+                * SelectionLightMask.Fade(y1, gate, feather);
+            if (a0 <= 0.0005f && a1 <= 0.0005f) continue;
             AddSoftBand(vh, y0, y1, half0, half1, a0, a1);
         }
     }
@@ -370,6 +550,7 @@ internal sealed class SelectionHallLightGraphic : MaskableGraphic
         get => tint;
         set
         {
+            if (tint == value) return;      // 同色就不要重建網格
             tint = value;
             SetVerticesDirty();
         }
@@ -392,11 +573,17 @@ internal sealed class SelectionHallLightGraphic : MaskableGraphic
 
         Color warm = Color.Lerp(lampColour, tint, difficultyBlend);
         Color shade = new Color(0.03f, 0.03f, 0.05f, 1f);
+        // 布遮到哪裡。布後面那一段不畫 —— 見 SelectionLightMask。
+        float gate = SelectionLightMask.Gate(r);
+        float feather = r.height * 0.05f;
 
         // 天花板壓暗。廳堂的上半部本來就比舞台暗，少了這層就只是一張亮牆。
-        AddVerticalBand(vh, r, r.yMax, r.yMax - r.height * 0.38f,
-            new Color(shade.r, shade.g, shade.b, ceilingShade),
-            new Color(shade.r, shade.g, shade.b, 0f));
+        // 從布的下緣開始，不要刷在天鵝絨上 —— 布本來就已經夠暗了。
+        float ceilingFar = r.yMax - r.height * 0.38f;
+        if (gate > ceilingFar)
+            AddVerticalBand(vh, r, gate, ceilingFar,
+                new Color(shade.r, shade.g, shade.b, ceilingShade),
+                new Color(shade.r, shade.g, shade.b, 0f));
 
         // 地板把光反上來，緩慢起伏。
         float bounce = bounceStrength * (0.85f + 0.15f * Mathf.Sin(time * 0.5f));
@@ -405,8 +592,8 @@ internal sealed class SelectionHallLightGraphic : MaskableGraphic
             new Color(warm.r, warm.g, warm.b, 0f));
 
         // 兩道交叉的側光。呼吸相位錯開，否則看起來像同一顆燈在閃。
-        AddRake(vh, r, -1f, 0.11f, warm);
-        AddRake(vh, r, 1f, 2.3f, warm);
+        AddRake(vh, r, -1f, 0.11f, warm, gate, feather);
+        AddRake(vh, r, 1f, 2.3f, warm, gate, feather);
 
         // 牆上的壁燈，離舞台越遠越暗。
         for (int i = 0; i < SconcesPerSide; i++)
@@ -417,13 +604,15 @@ internal sealed class SelectionHallLightGraphic : MaskableGraphic
             {
                 float flicker = 0.78f + 0.22f * Mathf.Sin(time * (1.1f + 0.31f * i) + side * 1.7f + i);
                 AddHalo(vh, new Vector2(side * r.width * 0.43f, y), r.width * 0.05f,
-                    warm, sconceStrength * fade * flicker);
+                    warm, sconceStrength * fade * flicker
+                        * SelectionLightMask.Fade(y, gate, feather));
             }
         }
     }
 
     /// <summary>A beam crossing the frame from one of the upper corners.</summary>
-    private void AddRake(VertexHelper vh, Rect r, float side, float phase, Color warm)
+    private void AddRake(VertexHelper vh, Rect r, float side, float phase, Color warm,
+        float gate, float feather)
     {
         const int Bands = 10;
         float peak = rakeStrength * (0.7f + 0.3f * Mathf.Sin(time * 0.42f + phase));
@@ -442,8 +631,11 @@ internal sealed class SelectionHallLightGraphic : MaskableGraphic
             Vector2 c1 = origin + axis * (length * t1);
             Vector2 e0 = across * (r.width * Mathf.Lerp(0.025f, 0.15f, t0));
             Vector2 e1 = across * (r.width * Mathf.Lerp(0.025f, 0.15f, t1));
-            float a0 = peak * Mathf.Sin(Mathf.PI * Mathf.Clamp01(t0 * 1.15f));
-            float a1 = peak * Mathf.Sin(Mathf.PI * Mathf.Clamp01(t1 * 1.15f));
+            float a0 = peak * Mathf.Sin(Mathf.PI * Mathf.Clamp01(t0 * 1.15f))
+                * SelectionLightMask.Fade(c0.y, gate, feather);
+            float a1 = peak * Mathf.Sin(Mathf.PI * Mathf.Clamp01(t1 * 1.15f))
+                * SelectionLightMask.Fade(c1.y, gate, feather);
+            if (a0 <= 0.0005f && a1 <= 0.0005f) continue;
             AddSoftBand(vh, c0, c1, e0, e1, warm, a0, a1);
         }
     }
@@ -578,6 +770,7 @@ internal sealed class SelectionSmokeGraphic : MaskableGraphic
         get => tint;
         set
         {
+            if (tint == value) return;      // 同色就不要重建網格
             tint = value;
             SetVerticesDirty();
         }
@@ -814,6 +1007,7 @@ internal sealed class SelectionDustGraphic : MaskableGraphic
         get => tint;
         set
         {
+            if (tint == value) return;      // 同色就不要重建網格
             tint = value;
             SetVerticesDirty();
         }
@@ -938,6 +1132,7 @@ internal sealed class SelectionScoreGraphic : MaskableGraphic
         get => tint;
         set
         {
+            if (tint == value) return;      // 同色就不要重建網格
             tint = value;
             SetVerticesDirty();
         }

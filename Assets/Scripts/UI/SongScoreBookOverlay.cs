@@ -15,6 +15,9 @@ public sealed class SongScoreBookOverlay : MonoBehaviour
 {
     private static SongScoreBookOverlay instance;
 
+    /// <summary>書開著的時候，底下的轉盤不該收到滾輪和拖曳。</summary>
+    public static bool IsOpen => instance != null;
+
     private SongSelectionManager.SongOption group;
     private Action<SongSelectionManager.SongOption> selected;
     private CanvasGroup canvasGroup;
@@ -88,9 +91,8 @@ public sealed class SongScoreBookOverlay : MonoBehaviour
 
         book = AddRect(transform, "OpenScoreBook", new Vector2(1680f, 900f), Vector2.zero);
         Image leather = book.gameObject.AddComponent<Image>();
-        leather.sprite = ClassicalBookUITheme.GetPaperTextureSprite();
-        leather.type = Image.Type.Tiled;
-        leather.color = new Color(0.105f, 0.038f, 0.025f, 1f);
+        ClassicalBookUITheme.ApplyDarkSurface(leather,
+            new Color(0.105f, 0.038f, 0.025f, 1f), ClassicalBookUITheme.Surface.Leather, 2.5f);
         leather.raycastTarget = false;
         Outline bookRim = book.gameObject.AddComponent<Outline>();
         bookRim.effectColor = ClassicalBookUITheme.Gold;
@@ -219,7 +221,7 @@ public sealed class SongScoreBookOverlay : MonoBehaviour
         string authorValue = string.IsNullOrWhiteSpace(song.author)
             ? Localize.T("未知作者", "未知作者", "Unknown Artist") : song.author;
         TextMeshProUGUI author = AddText(leftPage, authorValue, 22f,
-            new Color(0.37f, 0.24f, 0.12f, 1f), FontStyles.Italic, TextAlignmentOptions.Center);
+            new Color(0.37f, 0.24f, 0.12f, 1f), FontStyles.Normal, TextAlignmentOptions.Center);
         SetAnchors(author.rectTransform, new Vector2(0.09f, 0.115f), new Vector2(0.91f, 0.17f),
             Vector2.zero, Vector2.zero);
         ClassicalBookUITheme.ApplyContentFont(author);
@@ -422,27 +424,29 @@ public sealed class SongScoreBookOverlay : MonoBehaviour
         practiceLabel.rectTransform.offsetMax = Vector2.zero;
         practiceLabel.raycastTarget = false;
 
+        // 這一列的按鈕加寬到手指按得到：原本每顆只佔 8% 的列寬（約 50 邏輯單位，
+        // 換算實體像素 37，遠在 44 的門檻底下）。
         Button slower = AddFlatButton(practiceRow, "Slower",
-            new Vector2(0.33f, 0.06f), new Vector2(0.41f, 0.94f));
+            new Vector2(0.30f, 0.04f), new Vector2(0.41f, 0.96f));
         AddStepperCaption(slower, "−", 17f);
         TextMeshProUGUI speedLabel = AddText(practiceRow, "1.00×", 14f,
             new Color(0.25f, 0.15f, 0.075f, 1f), FontStyles.Bold, TextAlignmentOptions.Center);
-        speedLabel.rectTransform.anchorMin = new Vector2(0.42f, 0f);
-        speedLabel.rectTransform.anchorMax = new Vector2(0.575f, 1f);
+        speedLabel.rectTransform.anchorMin = new Vector2(0.415f, 0f);
+        speedLabel.rectTransform.anchorMax = new Vector2(0.55f, 1f);
         speedLabel.rectTransform.offsetMin = Vector2.zero;
         speedLabel.rectTransform.offsetMax = Vector2.zero;
         speedLabel.raycastTarget = false;
         Button faster = AddFlatButton(practiceRow, "Faster",
-            new Vector2(0.585f, 0.06f), new Vector2(0.665f, 0.94f));
+            new Vector2(0.555f, 0.04f), new Vector2(0.665f, 0.96f));
         AddStepperCaption(faster, "+", 17f);
         Button reset = AddFlatButton(practiceRow, "ResetSpeed",
-            new Vector2(0.675f, 0.06f), new Vector2(0.775f, 0.94f));
+            new Vector2(0.675f, 0.04f), new Vector2(0.80f, 0.96f));
         AddStepperCaption(reset, Localize.T("原速", "原速", "Reset"), 12f);
 
         // 看譜面：在開始之前先從正上方看一次這個難度的排列。和練習模式、速度同一
         // 列 —— 它們都是「要不要打這一份、怎麼打」的準備動作。
         Button viewChart = AddFlatButton(practiceRow, "ViewChart",
-            new Vector2(0.79f, 0.06f), new Vector2(1f, 0.94f));
+            new Vector2(0.81f, 0.04f), new Vector2(1f, 0.96f));
         AddStepperCaption(viewChart, Localize.T("看譜面", "看谱面", "View"), 12f);
 
         CanvasGroup analysisGroup = analysisRoot.gameObject.AddComponent<CanvasGroup>();
@@ -506,6 +510,61 @@ public sealed class SongScoreBookOverlay : MonoBehaviour
         AddHoverTrigger(hover, EventTriggerType.PointerEnter, () => ExpandAnalysis(entry));
         AddHoverTrigger(hover, EventTriggerType.PointerExit, () => CollapseAnalysis(entry));
 
+        // 側耳：手指沒有「滑過」。
+        //
+        // 技術抽屜原本只有 PointerEnter 會展開，而同一張紙條的 onClick 直接發車
+        // —— 用手指按下去＝展開的同時就開始遊戲，抽屜裡的練習模式、速度 ±、看譜
+        // 面四顆鈕**永遠碰不到**。紙條右緣外掛一個看得見的側耳，點它是展開、點紙
+        // 條本身才是發車。滑鼠那條路原封不動。
+        var tabObject = new GameObject("AnalysisTab", typeof(RectTransform),
+            typeof(CanvasRenderer), typeof(Image), typeof(Button));
+        tabObject.layer = plate.gameObject.layer;
+        var tabRect = tabObject.GetComponent<RectTransform>();
+        tabRect.SetParent(plate.rectTransform, false);
+        tabRect.anchorMin = new Vector2(1f, 0f);
+        tabRect.anchorMax = new Vector2(1f, 1f);
+        tabRect.pivot = new Vector2(0f, 0.5f);
+        tabRect.anchoredPosition = new Vector2(-2f, 0f);
+        tabRect.sizeDelta = new Vector2(64f, 0f);
+        var tabImage = tabObject.GetComponent<Image>();
+        tabImage.sprite = ClassicalBookUITheme.GetPaperTextureSprite();
+        tabImage.type = Image.Type.Tiled;
+        tabImage.color = new Color(0.78f, 0.68f, 0.50f, 0.98f);
+        var tabButton = tabObject.GetComponent<Button>();
+        tabButton.targetGraphic = tabImage;
+        ColorBlock tabColours = tabButton.colors;
+        tabColours.normalColor = Color.white;
+        tabColours.highlightedColor = new Color(1.08f, 1.04f, 0.92f, 1f);
+        tabColours.pressedColor = new Color(0.86f, 0.80f, 0.70f, 1f);
+        tabColours.fadeDuration = 0.08f;
+        tabButton.colors = tabColours;
+
+        var tabMark = new GameObject("Mark", typeof(RectTransform), typeof(CanvasRenderer),
+            typeof(TextMeshProUGUI));
+        tabMark.layer = tabObject.layer;
+        var markRect = tabMark.GetComponent<RectTransform>();
+        markRect.SetParent(tabRect, false);
+        markRect.anchorMin = Vector2.zero;
+        markRect.anchorMax = Vector2.one;
+        markRect.offsetMin = Vector2.zero;
+        markRect.offsetMax = Vector2.zero;
+        var mark = tabMark.GetComponent<TextMeshProUGUI>();
+        mark.text = "＋";
+        mark.fontSize = 30f;
+        mark.alignment = TextAlignmentOptions.Center;
+        mark.color = new Color(0.30f, 0.17f, 0.08f, 0.9f);
+        mark.raycastTarget = false;
+        ClassicalBookUITheme.ApplyLocalizedFont(mark);
+
+        DifficultyEntry tabEntry = entry;
+        tabButton.onClick.AddListener(() =>
+        {
+            // 兩條路共用同一個旗標，否則每幀的高度補間會被兩邊搶著寫。
+            if (tabEntry.expanded) CollapseAnalysis(tabEntry);
+            else ExpandAnalysis(tabEntry);
+            mark.text = tabEntry.expanded ? "－" : "＋";
+        });
+
         SongSelectionManager.SongOption captured = difficulty;
         button.onClick.AddListener(() => ChooseDifficulty(captured));
     }
@@ -562,7 +621,12 @@ public sealed class SongScoreBookOverlay : MonoBehaviour
             entry.layout.preferredHeight = Mathf.MoveTowards(entry.layout.preferredHeight,
                 targetHeight, 720f * Time.unscaledDeltaTime);
             // 練習列上的按鈕要按得到，但收起來的時候不能擋住底下的難度卡。
-            entry.analysisGroup.blocksRaycasts = entry.expanded;
+            //
+            // 跟著**看不看得見**走，不是跟著那個布林走：布林是瞬間翻的，alpha 要
+            // 125ms —— 展開時 raycast 先到（面板還是透明的，底下的難度卡卻已經點
+            // 不到），收起時 raycast 先走（面板還看得見，點在圖上會穿透到底下的
+            // 難度卡，直接開場）。
+            entry.analysisGroup.blocksRaycasts = entry.analysisGroup.alpha > 0.6f;
             entry.analysisGroup.alpha = Mathf.MoveTowards(entry.analysisGroup.alpha,
                 entry.expanded ? 1f : 0f, 8f * Time.unscaledDeltaTime);
             if (!entry.expanded && entry.analysisGroup.alpha <= 0.001f &&
@@ -675,7 +739,9 @@ public sealed class SongScoreBookOverlay : MonoBehaviour
 
         // 底色本身很濃，靠 normalColor 的 alpha 壓到幾乎看不見；滑過去才浮上來。
         ColorBlock colours = backButton.colors;
-        colours.normalColor = new Color(1f, 1f, 1f, 0.16f);
+        // 0.16 幾乎是看不見的。那是為滑鼠設計的：移過去才浮出來。手指沒有「移過
+        // 去」這一步，而這是整本書唯一的出口 —— 看不見的出口等於沒有出口。
+        colours.normalColor = new Color(1f, 1f, 1f, 0.42f);
         colours.highlightedColor = new Color(1f, 0.94f, 0.82f, 0.58f);
         colours.pressedColor = new Color(0.82f, 0.70f, 0.52f, 0.85f);
         colours.selectedColor = colours.highlightedColor;
@@ -724,7 +790,7 @@ public sealed class SongScoreBookOverlay : MonoBehaviour
     private void DrawEmptyScore(RectTransform page)
     {
         TextMeshProUGUI heading = AddText(page, group?.displayName ?? string.Empty, 22f,
-            new Color(0.25f, 0.16f, 0.08f, 0.75f), FontStyles.Italic, TextAlignmentOptions.Center);
+            new Color(0.25f, 0.16f, 0.08f, 0.75f), FontStyles.Normal, TextAlignmentOptions.Center);
         SetAnchored(heading.rectTransform, new Vector2(0.5f, 1f), new Vector2(620f, 42f), new Vector2(0f, -42f));
         ClassicalBookUITheme.ApplyContentFont(heading);
 

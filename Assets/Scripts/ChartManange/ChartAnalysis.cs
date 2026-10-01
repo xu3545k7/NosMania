@@ -53,8 +53,37 @@ public sealed class ChartAnalysis
     public float trillRatio;
     /// <summary>Simultaneous two-hand moments where the left hand sits above the right.</summary>
     public float handCrossRatio;
-    /// <summary>Seconds the chart spends above twelve notes a second: what endurance actually costs.</summary>
+    /// <summary>Seconds the chart spends above twelve notes a second.</summary>
+    /// <remarks>
+    /// 雷達的耐力軸已經不看這個了（改看 <see cref="staminaLoad"/>），這裡留著是因為
+    /// 技階第 10 級「無窮動」的門檻是用秒數寫的（SyllabusLadder），而「至少持續十秒
+    /// 每秒 12 顆」本身是個說得通的門檻。
+    /// </remarks>
     public float sustainedSeconds;
+
+    /// <summary>
+    /// How much the chart asks you to keep paying: notes beyond a rate you could
+    /// hold indefinitely, weighted up the longer a stretch runs unbroken.
+    /// </summary>
+    /// <remarks>
+    /// **三件事和 <see cref="sustainedSeconds"/> 不同。**
+    ///
+    /// 一、**沒有開關。** 舊的量是「密度 ≥ 12 顆/秒的秒數」，11.9 擐四分鐘得 0、
+    /// 12.1 擐十秒得 10。而曲庫的密度中位只有 7～8 顆/秒，那條線架得太高，
+    /// **半數的譜拿到 0**，那一軸對它們等於不存在。現在從休息水位起算超出量。
+    ///
+    /// 二、**連續時間超線性。** 一段連續 120 秒和分散的四段 30 秒，舊的算法給一樣的
+    /// 分數，可是前者累得多。現在每一段各自乘上「這段有多長」的加權。
+    ///
+    /// 三、**固定一秒一格。** 顯示用的 48 個密度桶是 lengthSeconds/48，最短的曲子 0.8
+    /// 秒一桶、最長的 20 秒一桶 —— 拿那個去量「連續擐了多久」是量不準的。
+    ///
+    /// 強度算的是**音符**不是節奏點：高速單點吃運指、連續砸和弦吃手臂，兩種都累。
+    /// 這一點和速度軸相反 —— 速度軸必須把和弦併成一個拍點。
+    ///
+    /// 和難度等級的秩相關：0.909，舊的硬門檻是 0.839；拿到 0 的從 51% 降到 6%。
+    /// </remarks>
+    public float staminaLoad;
     /// <summary>
     /// Notes that begin while an earlier note of the same hand is still held --
     /// one finger sustaining while the others move.  Needs no pitch, so it works
@@ -77,9 +106,43 @@ public sealed class ChartAnalysis
 
     public bool HasExcerpt => excerptPitches != null && excerptPitches.Length > 0;
     /// <summary>
+    /// The most rhythm points the chart has in one second, both hands together.
+    /// </summary>
+    /// <remarks>
+    /// **這是雷達「速度」軸畫的量。** 對玩家來說快慢是「拍點來得多密」，和每一下
+    /// 用幾根手指、由哪隻手接都無關：一串在兩手之間分工的音階，和同一串全給右手，
+    /// 讀起來一樣快；而一個厚和弦是**一個**拍點，不是五個。
+    ///
+    /// 之前這一軸畫的是 <see cref="peakHandRate"/>（單手擊鍵），兩者的差別在兩手
+    /// 分工的譜上可以差到 8 下/秒。和難度等級的秩相關：節奏點 0.655、單手 0.622。
+    /// </remarks>
+    public float peakOnsetRate;
+
+    /// <summary>
+    /// Speed as the player feels it: rhythm points a second, each weighted up
+    /// when the hand has barely any time to travel into it.
+    /// </summary>
+    /// <remarks>
+    /// **密度低不代表不快。** 空隙如果被大跳吃掉，給你跳的時間就很少，手還是
+    /// 得動得很快。Grievous Lady 就是這樣：純節奏點 25/秒（全庫第七成），可是它
+    /// 的空間有很大一部分在大跳上，加權後 57.5（第 96 百分位）。
+    ///
+    /// 同一隻手相鄰兩個發聲點，距離 D 半音、間隔 dt 秒，手必須以 D/dt 移動；超過
+    /// <see cref="ComfortableTravel"/> 就按比例加重。
+    ///
+    /// **和跨度軸不是同一件事。** 跨度問「跳得多不多」，這裡問「跳得急不急」
+    /// —— 和 fastLeapRatio 的秩相關只有 0.43。和難度等級的相關 0.655 → 0.714。
+    /// </remarks>
+    public float speedLoad;
+
+    /// <summary>
     /// The most strikes one hand makes in a second, counting a chord as one
     /// strike.  Raw finger speed, separate from how thick the writing is.
     /// </summary>
+    /// <remarks>
+    /// 留著不是給速度軸用的，是給 <see cref="ChordLoad"/> 當被減數 —— 和弦軸問的
+    /// 是「同一隻手最忙的一秒，音符比擊鍵多出多少」，兩邊都必須是同一隻手。
+    /// </remarks>
     public float peakHandRate;
 
     /// <summary>
@@ -189,7 +252,7 @@ public static class ChartAnalysisCache
     private const double MillisecondsPerFrame = 2.0;
     private const int NotesBetweenTimeChecks = 256;
     /// <summary>Bump when the cache file's shape changes, so stale files are ignored.</summary>
-    private const int CacheVersion = 10;
+    private const int CacheVersion = 14;
     private const string CacheSuffix = ".analysis.json";
 
     private static readonly Dictionary<string, ChartAnalysis> completed =
@@ -402,10 +465,13 @@ public static class ChartAnalysisCache
                 trillRatio = (float?)json["trill_ratio"] ?? 0f,
                 handCrossRatio = (float?)json["hand_cross_ratio"] ?? 0f,
                 sustainedSeconds = (float?)json["sustained_seconds"] ?? 0f,
+                staminaLoad = (float?)json["stamina_load"] ?? 0f,
                 independenceRatio = (float?)json["independence_ratio"] ?? 0f,
                 octaveRatio = (float?)json["octave_ratio"] ?? 0f,
                 repeatRatio = (float?)json["repeat_ratio"] ?? 0f,
                 peakHandRate = (float?)json["peak_hand_rate"] ?? 0f,
+                peakOnsetRate = (float?)json["peak_onset_rate"] ?? 0f,
+                speedLoad = (float?)json["speed_load"] ?? 0f,
                 peakChordRate = (float?)json["peak_chord_rate"] ?? 0f,
                 fastRunRatio = (float?)json["fast_run_ratio"] ?? 0f,
                 thickRunRatio = (float?)json["thick_run_ratio"] ?? 0f,
@@ -438,8 +504,11 @@ public static class ChartAnalysisCache
             noteCount = (int?)json["note_count"] ?? 0,
             holdCount = (int?)json["hold_count"] ?? 0,
             peakHandRate = (float?)json["peak_hand_rate"] ?? 0f,
+            peakOnsetRate = (float?)json["peak_onset_rate"] ?? 0f,
+            speedLoad = (float?)json["speed_load"] ?? 0f,
             peakChordRate = (float?)json["peak_chord_rate"] ?? 0f,
             sustainedSeconds = (float?)json["sustained_seconds"] ?? 0f,
+            staminaLoad = (float?)json["stamina_load"] ?? 0f,
             fastLeapRatio = (float?)json["fast_leap_ratio"] ?? 0f,
             octaveRunRatio = (float?)json["octave_run_ratio"] ?? 0f,
             handCrossRatio = (float?)json["hand_cross_ratio"] ?? 0f,
@@ -461,8 +530,11 @@ public static class ChartAnalysisCache
             ["note_count"] = section.noteCount,
             ["hold_count"] = section.holdCount,
             ["peak_hand_rate"] = section.peakHandRate,
+            ["peak_onset_rate"] = section.peakOnsetRate,
+            ["speed_load"] = section.speedLoad,
             ["peak_chord_rate"] = section.peakChordRate,
             ["sustained_seconds"] = section.sustainedSeconds,
+            ["stamina_load"] = section.staminaLoad,
             ["fast_leap_ratio"] = section.fastLeapRatio,
             ["octave_run_ratio"] = section.octaveRunRatio,
             ["hand_cross_ratio"] = section.handCrossRatio,
@@ -546,10 +618,13 @@ public static class ChartAnalysisCache
                 ["trill_ratio"] = analysis.trillRatio,
                 ["hand_cross_ratio"] = analysis.handCrossRatio,
                 ["sustained_seconds"] = analysis.sustainedSeconds,
+                ["stamina_load"] = analysis.staminaLoad,
                 ["independence_ratio"] = analysis.independenceRatio,
                 ["octave_ratio"] = analysis.octaveRatio,
                 ["repeat_ratio"] = analysis.repeatRatio,
                 ["peak_hand_rate"] = analysis.peakHandRate,
+                ["peak_onset_rate"] = analysis.peakOnsetRate,
+                ["speed_load"] = analysis.speedLoad,
                 ["peak_chord_rate"] = analysis.peakChordRate,
                 ["fast_run_ratio"] = analysis.fastRunRatio,
                 ["thick_run_ratio"] = analysis.thickRunRatio,
@@ -637,6 +712,56 @@ public static class ChartAnalysisCache
     }
 
     /// <summary>One moment of one hand: the lowest and highest note it plays there.</summary>
+    /// <summary>從容的移動速度（半音/秒）と60 = 八度跳躍給你 200 毫秒。</summary>
+    private const float ComfortableTravel = 60f;
+    /// <summary>一個發聲點最多算幾個。沒上限的話一次極端移動就能獨占整整一秒。</summary>
+    private const float TravelWeightCap = 3f;
+
+    /// <summary>See <see cref="ChartAnalysis.speedLoad"/>.</summary>
+    private static float MeasureSpeedLoad(List<int> times, List<Onset> right, List<Onset> left)
+    {
+        var urgency = new Dictionary<int, float>();
+        for (int h = 0; h < 2; h++)
+        {
+            List<Onset> seq = h == 0 ? right : left;
+            for (int i = 1; i < seq.Count; i++)
+            {
+                float gap = (seq[i].time - seq[i - 1].time) / 1000f;
+                if (gap <= 0f || gap > 1f) continue;   // 超過一秒就不是被逼的
+                float travel = Mathf.Abs(seq[i].Centre - seq[i - 1].Centre) / gap;
+                if (!urgency.TryGetValue(seq[i].time, out float best) || travel > best)
+                    urgency[seq[i].time] = travel;
+            }
+        }
+
+        var pointTimes = new List<int>(times.Count);
+        var weights = new List<float>(times.Count);
+        int previous = int.MinValue;
+        for (int i = 0; i < times.Count; i++)
+        {
+            if (previous != int.MinValue && times[i] - previous < ChordWindowMs) continue;
+            previous = times[i];
+            urgency.TryGetValue(times[i], out float travel);
+            pointTimes.Add(times[i]);
+            weights.Add(Mathf.Clamp(travel / ComfortableTravel, 1f, TravelWeightCap));
+        }
+
+        float peak = 0f;
+        float running = 0f;
+        int start = 0;
+        for (int i = 0; i < pointTimes.Count; i++)
+        {
+            running += weights[i];
+            while (pointTimes[i] - pointTimes[start] > 1000)
+            {
+                running -= weights[start];
+                start++;
+            }
+            if (running > peak) peak = running;
+        }
+        return peak;
+    }
+
     private struct Onset
     {
         public int time;
@@ -741,6 +866,7 @@ public static class ChartAnalysisCache
             trillNotes += CountTrillNotes(seq);
         }
 
+        analysis.speedLoad = MeasureSpeedLoad(times, right, left);
         analysis.hasTechniqueData = true;
         analysis.leapRatio = quickMoves > 0 ? (float)leaps / quickMoves : 0f;
         analysis.arpeggioRatio = (float)arpeggioNotes / analysis.noteCount;
@@ -888,6 +1014,97 @@ public static class ChartAnalysisCache
         return peak;
     }
 
+    /// <summary>
+    /// 和弦要併成一次擊鍵，允許的誤差。
+    /// </summary>
+    /// <remarks>
+    /// **是容差，不是相等。** 原本用「時間完全相等」去重，只併得掉寫在同一毫秒上
+    /// 的和弦。曲庫有 19% 的譜把和弦攤在 1～7 毫秒內，其中 8% 的譜光是這樣就足以
+    /// 改變尖峰值 —— 中位差 9 下/秒、最糟 24。那等於「譜很厚」被讀成「譜很快」，
+    /// 正是數擊鍵這件事要避免的。
+    /// </remarks>
+    private const int ChordWindowMs = 8;
+
+    /// <summary>可以無限撐下去的水位（每秒音符數）。低於這個不累積疲勞。</summary>
+    private const float StaminaRest = 6f;
+    /// <summary>連續時間的指數。1 = 線性，大於 1 = 連續的更貴。</summary>
+    private const float StaminaGamma = 1.3f;
+    /// <summary>
+    /// 強度的指數。
+    /// </summary>
+    /// <remarks>
+    /// 線性的話，「5 秒的高密度」永遠贏不了「60 秒的中密度」—— 可是密度夠高
+    /// 的話五秒就受不了了。1.6 是這個曲庫裡和難度相關最高的值（0.914），也剛好
+    /// 是那個比較翻轉的地方：5 秒 30 顆/秒得 383、60 秒 8 顆/秒得 182；1.3 時兩者
+    /// 打平，1.0 時耐久贏。
+    /// </remarks>
+    private const float StaminaAlpha = 1.6f;
+    /// <summary>喘幾秒不算中斷。</summary>
+    private const int StaminaGapSeconds = 2;
+    /// <summary>把時長加權換成看得懂的單位：以一分鐘為基準的「額外音符數」。</summary>
+    private const float StaminaReferenceSeconds = 60f;
+
+    /// <summary>See <see cref="ChartAnalysis.staminaLoad"/>.</summary>
+    private static float MeasureStaminaLoad(List<int> times)
+    {
+        if (times.Count == 0) return 0f;
+
+        int slots = times[times.Count - 1] / 1000 + 1;
+        var curve = new int[slots];
+        for (int i = 0; i < times.Count; i++)
+        {
+            int slot = times[i] / 1000;
+            if (slot >= 0 && slot < slots) curve[slot]++;
+        }
+
+        float total = 0f;
+        int at = 0;
+        while (at < slots)
+        {
+            if (curve[at] - StaminaRest <= 0f) { at++; continue; }
+
+            int lastBusy = at;
+            float excess = 0f;
+            for (int j = at; j < slots; j++)
+            {
+                if (curve[j] - StaminaRest > 0f)
+                {
+                    excess += Mathf.Pow(curve[j] - StaminaRest, StaminaAlpha);
+                    lastBusy = j;
+                }
+                else if (j - lastBusy >= StaminaGapSeconds) break;
+            }
+            float seconds = lastBusy - at + 1;
+            total += excess * Mathf.Pow(seconds / StaminaReferenceSeconds, StaminaGamma - 1f);
+            at = lastBusy + 1;
+        }
+        return total;
+    }
+
+    /// <summary>Busiest second in rhythm points, both hands together.</summary>
+    /// <remarks>times 已照時間排序（呼叫處和底下的滑動窗都這樣假設）。</remarks>
+    private static float MeasurePeakOnsetRate(List<int> times)
+    {
+        var onsets = new List<int>(times.Count);
+        int previous = int.MinValue;
+        for (int i = 0; i < times.Count; i++)
+        {
+            if (previous != int.MinValue && times[i] - previous < ChordWindowMs) continue;
+            previous = times[i];
+            onsets.Add(times[i]);
+        }
+
+        int peak = 0;
+        int start = 0;
+        for (int i = 0; i < onsets.Count; i++)
+        {
+            while (onsets[i] - onsets[start] > 1000) start++;
+            int inWindow = i - start + 1;
+            if (inWindow > peak) peak = inWindow;
+        }
+        return peak;
+    }
+
     private static float MeasurePeakHandRate(List<int> times, List<byte> hands)
     {
         int peak = 0;
@@ -898,7 +1115,7 @@ public static class ChartAnalysisCache
             for (int i = 0; i < times.Count; i++)
             {
                 if (hands[i] != h) continue;
-                if (onsets.Count > 0 && onsets[onsets.Count - 1] == times[i]) continue;
+                if (onsets.Count > 0 && times[i] - onsets[onsets.Count - 1] < ChordWindowMs) continue;
                 onsets.Add(times[i]);
             }
 
@@ -1140,6 +1357,8 @@ public static class ChartAnalysisCache
 
         analysis.independenceRatio = MeasureIndependence(times, hands, ends);
         analysis.peakHandRate = MeasurePeakHandRate(times, hands);
+        analysis.peakOnsetRate = MeasurePeakOnsetRate(times);
+        analysis.staminaLoad = MeasureStaminaLoad(times);
         analysis.peakChordRate = MeasurePeakChordRate(times, hands);
         analysis.averageDensity = analysis.noteCount / Mathf.Max(0.001f, analysis.lengthSeconds);
 

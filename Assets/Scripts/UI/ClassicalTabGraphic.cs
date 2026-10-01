@@ -38,6 +38,9 @@ public sealed class ClassicalTabGraphic : MaskableGraphic
     /// <summary>How many strips the ribbon is cut into along its length.</summary>
     private const int Strips = 26;
 
+    /// <summary>外緣柔邊往外鋪多寬（像素）。</summary>
+    private const float FeatherWidth = 1f;
+
     private Texture weave;
 
     public override Texture mainTexture => weave != null ? weave : base.mainTexture;
@@ -115,6 +118,72 @@ public sealed class ClassicalTabGraphic : MaskableGraphic
             new Vector2(r.xMin + cut, r.yMin), new Vector2(r.xMax - cut, r.yMin),
             new Vector2(r.xMax - cut, r.yMin + rule), new Vector2(r.xMin + cut, r.yMin + rule),
             shaded, shaded, shaded, shaded);
+
+        Feather(vh, r, x0, x1, middle, top, waist, bottom, lit, shaded);
+    }
+
+    /// <summary>
+    /// 沿著整圈輪廓往外鋪一圈一像素、淡到全透明的裙邊。
+    /// </summary>
+    /// <remarks>
+    /// 這塊牌子底下那一面每一幀都在縮放，而 MSAA 是關的：硬切的斜邊在縮放途中
+    /// 會一幀一幀跳階，看起來像邊緣自己在爬，兩端的尖角最明顯 —— 那裡的邊最
+    /// 斜，一個像素的階梯就佔掉整個尖端。多鋪這一像素之後，硬體插值會自己把它
+    /// 補成漸層，等於替這個形狀做了一層抗鋸齒。
+    ///
+    /// 只動邊，不動形：裙邊貼在既有輪廓外面，缺口的幾何一個點都沒有改 —— 缺口
+    /// 開在哪一端是有意義的（見類別說明），不是可以順手調的東西。
+    ///
+    /// 往外推的方向取相鄰兩條邊法線的角平分線，而不是各邊自己的法線：這樣兩塊
+    /// 裙邊在轉角共用同一個外側頂點，接得起來，尖端也不會裂出一個楔形的缺口。
+    /// </remarks>
+    private void Feather(VertexHelper vh, Rect r, float x0, float x1, float middle,
+        Color top, Color waist, Color bottom, Color lit, Color shaded)
+    {
+        Vector2[] ring =
+        {
+            new Vector2(x0, r.yMax), new Vector2(x1, r.yMax), new Vector2(r.xMax, middle),
+            new Vector2(x1, r.yMin), new Vector2(x0, r.yMin), new Vector2(r.xMin, middle),
+        };
+        // 每一條邊在輪廓上的真實顏色。柔邊要從它自己淡出去，否則等於沿著邊鑲了
+        // 一條別的顏色的線，比鋸齒還顯眼。
+        Color[] from = { lit, top, waist, shaded, bottom, waist };
+        Color[] to = { lit, waist, bottom, shaded, waist, top };
+
+        var outward = new Vector2[ring.Length];
+        for (int i = 0; i < ring.Length; i++)
+        {
+            Vector2 next = ring[(i + 1) % ring.Length];
+            Vector2 edge = next - ring[i];
+            Vector2 n = new Vector2(edge.y, -edge.x).normalized;
+            // 法線有兩個方向，取背對中心的那一個。這樣寫就不必假設頂點是順時針
+            // 還是逆時針排的。
+            if (Vector2.Dot(n, (ring[i] + next) * 0.5f - r.center) < 0f) n = -n;
+            outward[i] = n;
+        }
+
+        var push = new Vector2[ring.Length];
+        for (int i = 0; i < ring.Length; i++)
+        {
+            Vector2 bisector = (outward[(i + ring.Length - 1) % ring.Length] + outward[i]).normalized;
+            // 夾角越尖，要推得越遠才補得滿；但尖端的 1/cos 會衝到很大，夾住它，
+            // 免得柔邊在那裡長出一根刺。
+            float lean = Mathf.Max(0.35f, Vector2.Dot(bisector, outward[i]));
+            push[i] = bisector * (FeatherWidth / lean);
+        }
+
+        for (int i = 0; i < ring.Length; i++)
+        {
+            int j = (i + 1) % ring.Length;
+            AddQuad(vh, ring[i], ring[j], ring[j] + push[j], ring[i] + push[i],
+                from[i], to[i], Fade(to[i]), Fade(from[i]));
+        }
+    }
+
+    /// <summary>同一個顏色，但完全透明 —— 柔邊外側的端點。</summary>
+    private static Color Fade(Color c)
+    {
+        return new Color(c.r, c.g, c.b, 0f);
     }
 
     /// <summary>

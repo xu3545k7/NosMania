@@ -1061,7 +1061,8 @@ public sealed class RuntimeSongLibraryPanel : MonoBehaviour
     }
 
 #if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
-    private static class WindowsFilePicker
+    /// <summary>原生的開檔對話框。玩家頭像那邊也用同一個，不要再寫一份 P/Invoke。</summary>
+    internal static class WindowsFilePicker
     {
         [StructLayout(LayoutKind.Sequential)]
         private struct OpenFileName

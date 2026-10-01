@@ -162,6 +162,7 @@ public class ResultsScreen : MonoBehaviour
     private bool lastResultWasAuto;
     private int lastLocalPlacement;
     private bool scoreHandledForOpenResult;
+    private bool ratingHandledForOpenResult;
 
     private void Awake()
     {
@@ -230,14 +231,11 @@ public class ResultsScreen : MonoBehaviour
         // 這張圖只是墊在底下的顏色和紋理：BookBoardGraphic.Attach 會把它關掉，
         // 並且把它的貼圖接過去當皮紋。
         Image leather = book.gameObject.AddComponent<Image>();
-        leather.color = Leather;
         leather.raycastTarget = false;
-        Sprite boardGrain = ClassicalBookUITheme.GetBoardTextureSprite();
-        if (boardGrain != null)
-        {
-            leather.sprite = boardGrain;
-            leather.type = Image.Type.Tiled;
-        }
+        // 0.105 的 tint 把木紋壓成 1.23 級 —— 整本書的皮是一塊平的棕色。gain 2
+        // 之後是 4.25 級，而練習室的木牆在更暗的 tint 下本來就有 4.93 級。
+        ClassicalBookUITheme.ApplyDarkSurface(leather, Leather,
+            ClassicalBookUITheme.Surface.Leather, 2.5f);
         Outline coverOutline = book.gameObject.AddComponent<Outline>();
         coverOutline.effectColor = LeatherEdge;
         coverOutline.effectDistance = new Vector2(5f, -5f);
@@ -249,6 +247,10 @@ public class ResultsScreen : MonoBehaviour
             boards.Profile = BookShape.Profile.Volume;
             boards.Set(Leather, new Color(0.135f, 0.055f, 0.033f, 1f),
                 new Color(0.84f, 0.78f, 0.62f, 1f), Gold);
+            // 這裡要的是**沒有**放大過的那一張：BookBoardGraphic 把 grain 當
+            // mainTexture 乘到皮、凹面、紙block 和鍍金四種頂點色上，而放大版的均值
+            // 是 0.55，鍍金和紙block 會一起暗掉 28%。
+            Sprite boardGrain = ClassicalBookUITheme.GetBoardTextureSprite();
             if (boardGrain != null) boards.Grain(boardGrain.texture, boardGrain.texture.width);
         }
 
@@ -501,6 +503,103 @@ public class ResultsScreen : MonoBehaviour
         closeButton = CreateButton("Close", page,
             Localize.T("返回選曲", "返回选曲", "Back to Song Select"), new Vector2(0f, 76f));
         closeButton.onClick.AddListener(OnClosePressed);
+
+        // 送審。平常不在，只有這一局剛好是某一級檢定的指定曲時才出現（見
+        // OfferSubmission），所以它不是「多一顆按鈕」，是「這一局剛好可以拿去用」。
+        submitButton = CreateButton("Submit", page, "送審", new Vector2(152f, 76f));
+        submitLabel = submitButton.GetComponentInChildren<TextMeshProUGUI>();
+        submitButton.onClick.AddListener(OnSubmitPressed);
+        submitButton.gameObject.SetActive(false);
+    }
+
+    private Button submitButton;
+    private TextMeshProUGUI submitLabel;
+    private int submitGrade;
+    private string submitChart = string.Empty;
+    private float[] submitMarks;
+    private int submitScore;
+    private bool submitExpression;
+
+    /// <summary>
+    /// 這一局能不能填進某一級檢定的某一格。
+    /// </summary>
+    /// <remarks>
+    /// **為什麼是按鈕不是自動收。** 送審永遠覆蓋那一格（玩家按下去就是要<b>這一
+    /// 局</b>，不是要系統幫他比大小），所以自動收會靜靜地拿一局壞的換掉一局好的。
+    /// 分數就在同一頁上，看完再決定。
+    ///
+    /// **為什麼不檢查先修階。** 先修不夠時這一格照樣填得進去，只是不會授級 —— 那一
+    /// 局是真的彈過的，沒有理由不記；<see cref="SyllabusProgress"/> 判定時才擋。
+    ///
+    /// **為什麼表情資料要兩個都有。** RecitalAssessment 的力度和踏板各佔情感表情的
+    /// 一半，而且<b>各自</b>在沒有資料時退回滿分。七八級要擋的就是這個，所以只有兩
+    /// 者都評得到才算數。
+    /// </remarks>
+    private void OfferSubmission(SongSelectionManager.SongOption song, int score,
+        Judgment.RecitalAssessment.Report report, bool expressionMeasured)
+    {
+        if (submitButton == null) return;
+        submitButton.gameObject.SetActive(false);
+        if (closeButton != null)
+            SetRect(closeButton.GetComponent<RectTransform>(), new Vector2(0.5f, 0f),
+                new Vector2(290f, 62f), new Vector2(0f, 76f));
+
+        if (lastResultWasAuto || !report.measured) return;
+        bool recitalRun = SettingsManager.Instance == null || SettingsManager.Instance.RecitalMode;
+        if (!recitalRun) return;
+
+        SongSelectionManager.SongOption played =
+            song != null && song.selectedVariant != null ? song.selectedVariant : song;
+        if (played == null || string.IsNullOrWhiteSpace(played.chartFileName)) return;
+
+        SyllabusPaper paper = null;
+        int slot = -1;
+        for (int i = 1; i <= SyllabusLadder.Grades.Length && paper == null; i++)
+        {
+            SyllabusPaper candidate = SyllabusProgress.PaperFor(i);
+            if (candidate?.charts == null) continue;
+            for (int c = 0; c < candidate.charts.Count; c++)
+            {
+                if (!string.Equals(candidate.charts[c], played.chartFileName,
+                        System.StringComparison.OrdinalIgnoreCase)) continue;
+                paper = candidate;
+                slot = c;
+                break;
+            }
+        }
+        // 只收「持有級 +1」以內的：更高的級數還沒輪到，收了那一格會放著等一個玩家
+        // 還不知道自己在等的東西。
+        if (paper == null || paper.grade > SyllabusProgress.Grade + 1) return;
+
+        submitGrade = paper.grade;
+        submitChart = played.chartFileName;
+        submitScore = score;
+        submitExpression = expressionMeasured;
+        submitMarks = new[] { report.completeness, report.melody, report.mistakes, report.expression };
+
+        string role = slot == 0 ? "技巧曲" : "歌唱曲";
+        if (submitLabel != null)
+            submitLabel.text = $"送審　{SyllabusProgress.Numeral(paper.grade)}級・{role}";
+        submitButton.interactable = true;
+        submitButton.gameObject.SetActive(true);
+        if (closeButton != null)
+            SetRect(closeButton.GetComponent<RectTransform>(), new Vector2(0.5f, 0f),
+                new Vector2(290f, 62f), new Vector2(-152f, 76f));
+    }
+
+    private void OnSubmitPressed()
+    {
+        if (string.IsNullOrEmpty(submitChart)) return;
+        bool awardedBefore = SyllabusProgress.PaperFor(submitGrade)?.awarded ?? false;
+        SyllabusProgress.Submit(submitGrade, submitChart, submitMarks, submitScore, submitExpression);
+        SyllabusPaper paper = SyllabusProgress.PaperFor(submitGrade);
+        bool awarded = paper != null && paper.awarded && !awardedBefore;
+        if (submitLabel != null)
+            submitLabel.text = awarded
+                ? $"已授　{SyllabusProgress.Numeral(submitGrade)}級　{paper.seal}"
+                : "已送審";
+        submitButton.interactable = false;
+        UiSfx.Select();
     }
 
     /// <summary>
@@ -926,7 +1025,10 @@ public class ResultsScreen : MonoBehaviour
                     && SettingsManager.Instance.PracticeMode;
                 lastLocalPlacement = lastResultWasAuto || practising
                     ? 0
-                    : LocalScoreRecords.RecordManualScore(selectedSong, stats.score);
+                    // 全連＝一顆 Miss、一次 Fail 都沒有。這兩個數字就在手邊，
+                    // 而在這之前它從來沒有被存下來過。
+                    : LocalScoreRecords.RecordManualScore(selectedSong, stats.score,
+                        stats.miss == 0 && stats.fail == 0);
                 scoreHandledForOpenResult = true;
             }
             SetResults(stats.perfect, stats.great, stats.good, stats.miss, stats.fail,
@@ -939,10 +1041,28 @@ public class ResultsScreen : MonoBehaviour
             var recitalNotes = recitalChart != null ? recitalChart.notes : null;
             float melodyAllowance = Judgment.RecitalAssessment.MelodyAllowance(recitalNotes);
             float mistouchAllowance = Judgment.RecitalAssessment.MistouchAllowance(recitalNotes);
-            SetAssessment(Judgment.RecitalAssessment.Evaluate(stats.score, recital.notes,
+            Judgment.RecitalAssessment.Report report = Judgment.RecitalAssessment.Evaluate(
+                stats.score, recital.notes,
                 recital.over3Key, melodyAllowance, recital.mistouch, mistouchAllowance,
                 pedal.correct, pedal.total,
-                dynamics.correct, dynamics.total));
+                dynamics.correct, dynamics.total);
+            SetAssessment(report);
+            OfferSubmission(selectedSong, stats.score, report,
+                pedal.total > 0 && dynamics.total > 0);
+
+            // 實力評分吃的是**每一局**，包含練習模式 —— 那正是排行榜刻意不收的那
+            // 些。自動演奏不算：那不是演奏者打的。
+            if (!lastResultWasAuto && !ratingHandledForOpenResult)
+            {
+                ratingHandledForOpenResult = true;
+                bool recitalRun = SettingsManager.Instance == null
+                    || SettingsManager.Instance.RecitalMode;
+                SongSelectionManager.SongOption playedChart =
+                    selectedSong != null && selectedSong.selectedVariant != null
+                        ? selectedSong.selectedVariant : selectedSong;
+                try { PlayerRating.Record(playedChart, stats.score, report, recitalRun); }
+                catch { }
+            }
             var rawTiming = statsManager.GetRawTimingOffsetStats();
             var inputTiming = jm != null
                 ? jm.GetInputTimingStats()
@@ -1156,6 +1276,7 @@ public class ResultsScreen : MonoBehaviour
         }
         if (panel != null) panel.SetActive(false);
         scoreHandledForOpenResult = false;
+        ratingHandledForOpenResult = false;
     }
 
     private void LateUpdate()

@@ -144,6 +144,8 @@ public class GameSettings
     [Header("Gameplay Settings")]
     [Range(10f, 2000f)]
     public float defaultSpeed = 80f;
+    /// <summary>流速跟著譜面的音符密度走。關掉就是固定的單位/秒。</summary>
+    public bool densityScaledScroll = true;
 
     [Range(2f, 5f)]
     public float gameStartDelay = 2f;
@@ -1021,6 +1023,24 @@ public class SettingsManager : MonoBehaviour
     }
     public float PianoVolume => gameSettings.pianoVolume;
     public float DefaultSpeed => gameSettings.defaultSpeed;
+
+    /// <summary>流速是不是跟著譜面的音符密度走。</summary>
+    /// <remarks>
+    /// **和 BPM 無關。** 這個旗標曾經叫 <c>beatLockedScroll</c>，那是第一版把流速接在
+    /// 拍子上時的名字；現在量的是<b>最忙 2 秒有幾次擊鍵</b>（見
+    /// <see cref="ChartScrollSpeed"/>），和速度標記、拍號、拍點表都沒有關係。
+    ///
+    /// 舊的設定檔沒有這個鍵也沒關係：<c>JsonUtility.FromJson</c> 會跑建構式，缺的
+    /// 鍵保留欄位初始值（true），只有 JSON 裡真的寫了 false 才會關掉。
+    /// </remarks>
+    public bool DensityScaledScroll => gameSettings == null || gameSettings.densityScaledScroll;
+
+    public void SetDensityScaledScroll(bool on)
+    {
+        if (gameSettings == null) return;
+        gameSettings.densityScaledScroll = on;
+        SaveSettings();
+    }
 
     public float GameStartDelay => gameSettings.gameStartDelay;
     public float NoteVisualHeight => gameSettings != null ? Mathf.Clamp(gameSettings.noteVisualHeight, 0.5f, 4f) : 2f;

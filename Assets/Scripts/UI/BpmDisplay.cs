@@ -57,6 +57,22 @@ public class BpmDisplay : MonoBehaviour
     // beat_timings has no single unit across all charts. Anchor its opening
     // median interval to first_bpm, then measure later tempo changes relatively.
     private float referenceBeatIntervalMs;
+
+    /// <summary>
+    /// 實際拿來當錪的 BPM。宣告的 <c>first_bpm</c> 和拍點表對得上就是它，
+    /// 對不上就從拍點表自己推。
+    /// </summary>
+    /// <remarks>
+    /// **為什麼不能無條件相信 first_bpm。** 它只是一個標示欄位，而產生它的管線
+    /// 上有好幾個默默填 120 的後備（偵測器找不到峰值、MIDI 沒有 tempo 事件、
+    /// tempo 事件壞掉）。真正決定音符位置的是 <c>beat_timings</c> —— 譜面就是照它
+    /// 畫的，所以宣告值和格線對不上的時候，該被懷疑的是宣告值。
+    ///
+    /// 推法：中位間隔當一拍算出 BPM，落在 55~320 就用；否則當一小節
+    /// （×拍號分子），再不行試 ×2、×4。這是八度歧義，沒有完美解 —— 但比
+    /// 相信一個已知會退化成 120 的欄位好。
+    /// </remarks>
+    private float anchorBpm;
     private sealed class DetectedTempoChange
     {
         public int timeMs;
@@ -191,6 +207,7 @@ public class BpmDisplay : MonoBehaviour
             lastSpeedDirection = 0;
             lastSpeedWarning = false;
             referenceBeatIntervalMs = 0f;
+            anchorBpm = 0f;
             detectedTimeSignatureChangeCount = -1;
             detectedBeatTimingCount = -1;
             detectedTempoChanges.Clear();
@@ -689,12 +706,12 @@ public class BpmDisplay : MonoBehaviour
 
     private float CalculateAnchoredBpm(float intervalMs, int denominator)
     {
-        if (intervalMs <= 0f || chart == null || chart.first_bpm <= 0f ||
+        if (intervalMs <= 0f || chart == null || anchorBpm <= 0f ||
             referenceBeatIntervalMs <= 0f) return 0f;
         float denominatorScale = timeSigDenominator > 0 && denominator > 0
             ? (float)timeSigDenominator / denominator
             : 1f;
-        return chart.first_bpm * referenceBeatIntervalMs / intervalMs *
+        return anchorBpm * referenceBeatIntervalMs / intervalMs *
             denominatorScale;
     }
 
@@ -836,16 +853,18 @@ public class BpmDisplay : MonoBehaviour
         // Auto-detect subdivision: compare median beat delta to expected duration from chart.first_bpm
         detectedSubdivision = 1;
         referenceBeatIntervalMs = MedianDelta(chart.beat_timings);
+        // 這是 HUD 上顯示的 BPM 數字，和音符流速無關（那邊看密度，見 ChartScrollSpeed）。
+        anchorBpm = ChartTempo.ResolveBpm(chart, beatsPerMeasure);
         try
         {
-            if (chart.first_bpm > 0f && chart.beat_timings.Count >= 2)
+            if (anchorBpm > 0f && chart.beat_timings.Count >= 2)
             {
                 int sampleCount = Mathf.Min(16, chart.beat_timings.Count - 1);
                 var deltas = new System.Collections.Generic.List<int>(sampleCount);
                 for (int i = 1; i <= sampleCount; i++) deltas.Add(chart.beat_timings[i] - chart.beat_timings[i - 1]);
                 deltas.Sort();
                 int median = deltas[deltas.Count / 2];
-                float expected = 60000f / Mathf.Max(1f, chart.first_bpm);
+                float expected = 60000f / Mathf.Max(1f, anchorBpm);
                 // Number of timing-grid entries per BPM beat. This is metadata
                 // only; BPM calculation below uses the relative interval.
                 float approx = expected / Mathf.Max(1f, median);
@@ -883,8 +902,8 @@ public class BpmDisplay : MonoBehaviour
             int span = t1 - t0;
             if (span <= 0) continue;
             float conventionalBeatsPerMeasure = (float)beatsPerMeasure / (float)beatUnitSubdivision;
-            float bpm = chart != null && chart.first_bpm > 0f && referenceBeatIntervalMs > 0f
-                ? chart.first_bpm * (referenceBeatIntervalMs * beatsPerMeasure) / span
+            float bpm = anchorBpm > 0f && referenceBeatIntervalMs > 0f
+                ? anchorBpm * (referenceBeatIntervalMs * beatsPerMeasure) / span
                 : 60000f * conventionalBeatsPerMeasure / (float)span;
             measureBpms.Add(bpm);
             if (enableDebug && debugBuilder.Length < 20000)
@@ -905,8 +924,8 @@ public class BpmDisplay : MonoBehaviour
             if (cnt > 0)
             {
                 avgDelta /= cnt;
-                float bpm = chart != null && chart.first_bpm > 0f && referenceBeatIntervalMs > 0f
-                    ? chart.first_bpm * referenceBeatIntervalMs / avgDelta
+                float bpm = anchorBpm > 0f && referenceBeatIntervalMs > 0f
+                    ? anchorBpm * referenceBeatIntervalMs / avgDelta
                     : 60000f / (avgDelta * beatUnitSubdivision);
                 measureBpms.Add(bpm);
                 if (enableDebug)

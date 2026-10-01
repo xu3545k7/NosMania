@@ -242,6 +242,7 @@ public class SongSelectionManager : MonoBehaviour
 
     [Header("Category Carousel")]
     [SerializeField] private RectTransform categoryCarouselRoot;
+    private RecitalCategoryBlind categoryBlind;
     [SerializeField] private TextMeshProUGUI categoryCarouselLabel;
     [SerializeField] private Button previousCategoryButton;
     [SerializeField] private Button nextCategoryButton;
@@ -267,9 +268,30 @@ public class SongSelectionManager : MonoBehaviour
     private bool pointerOverCategoryCarousel;
     // Runtime-created difficulty selector panel instance
     private GameObject difficultySelectorInstance = null;
+    /// <summary>
+    /// 分類槽的上緣離畫布頂多遠。
+    /// </summary>
+    /// <remarks>
+    /// 260 而不是 430：它<b>可以</b>疊在簾幕下襬上。整排排在布緣底下的那一版，布和
+    /// 分類之間留著一條沒有用的空帶，而那條空帶是整個畫面最貴的垂直空間（曲目卡要
+    /// 的就是它）。疊上去之後分類看起來是掛在布上的東西，而不是布底下另外一層。
+    /// </remarks>
+    private const float CategoryTop = 190f;
+
+    /// <summary>
+    /// 曲目卡整排往下讓多少。
+    /// </summary>
+    /// <remarks>
+    /// 上面多了 160 的簾桿，下面兩塊 216 高的銘牌換成 64 高的一條、讓出 152。分類疊
+    /// 到簾幕上之後又全部省了回來，所以曲目卡回到場景裡作者擺的位置，一格都不用讓。
+    /// </remarks>
+    private const float CarouselDrop = 0f;
+
     private RectTransform recitalToggleRoot;
+    private bool recitalToggleReady;
     private Image recitalToggleFace;
-    private Outline recitalToggleEdge;
+    private Button recitalToggleButton;
+    private RecitalToggleGlow recitalToggleGlow;
     private TextMeshProUGUI recitalToggleLabel;
     private RectTransform inlineDifficultyListRoot;
     private int currentIndex = 0;
@@ -350,6 +372,7 @@ public class SongSelectionManager : MonoBehaviour
     private readonly ChartAnalysisPanel analysisPanel = new ChartAnalysisPanel();
     private Coroutine analysisRoutine;
     private SongSelectionAtmosphere selectionAtmosphere;
+    private SelectionRail rail;
 
     private const string GroupingModePrefsKey = "song_grouping_mode";
     private const string UnknownLevelCategory = "?";
@@ -377,7 +400,21 @@ public class SongSelectionManager : MonoBehaviour
     {
         SettingsManager.LanguageChanged -= HandleLanguageChanged;
         SongDifficultyStrip.PreferenceChanged -= RestoreSelectionAtmosphereDifficulty;
+        PlayerSlots.Changed -= HandlePlayerChanged;
         if (Instance == this) Instance = null;
+    }
+
+    /// <summary>
+    /// 換人了：畫面上每一個「屬於某個人」的東西都要重讀。
+    /// </summary>
+    /// <remarks>
+    /// 掛在事件上而不是叫呼叫端記得 —— 換人的入口不只一個（資料卡、之後的檢定頁），
+    /// 而漏掉一處的症狀是**看到上一個人的成績**，那比沒更新更糟。
+    /// </remarks>
+    private void HandlePlayerChanged()
+    {
+        if (rail != null) rail.RefreshRecord();
+        UpdateCarouselVisuals(false);
     }
 
     private void HandleLanguageChanged(AppLanguage _)
@@ -405,6 +442,38 @@ public class SongSelectionManager : MonoBehaviour
 
         ApplyClassicalBookTheme();
         selectionAtmosphere = SongSelectionAtmosphere.Attach(selectionPanel);
+        // 左右下角那兩塊銘牌：左邊是演奏者本人（頭像、評分、評語），右邊是評分
+        // 明細和上次挑戰。那兩個角落原本是 44% 的裸照片。
+        // 最上面那條簾桿：左邊回練習室、中間玩家的實力評分（同時是改名／換頭像的
+        // 入口）、右邊設定。簷幕掛在它下面。
+        //
+        // **左右下角那兩塊 780x216 的銘牌已經拿掉。** 它們原本裝的是同一份評分的細
+        // 項，而評分搬到桿上之後那兩塊就只剩外框；下緣改成兩條 64 高的入口（左檢
+        // 定、右評分明細），讓出 152 給曲目卡。
+        rail = SelectionRail.Attach(selectionPanel.GetComponent<RectTransform>(), this);
+        // 桿要壓在房間上面，但在**場景裡那些控制項**（設定鈕）下面。
+        //
+        // 場景物件的 sibling index 全部排在執行期才加進去的物件<b>前面</b>，而桿是
+        // 執行期加的 —— 不調順序的話，那塊不透明的銅帶會把設定鈕整顆蓋掉（實機上
+        // 就是這樣：桿的右端空著，按也按不到）。氛圍層之後一格，剛好夾在房間照片
+        // 和所有場景控制項之間。
+        if (rail != null && selectionAtmosphere != null)
+            rail.transform.SetSiblingIndex(selectionAtmosphere.transform.GetSiblingIndex() + 1);
+        PlayerSlots.Changed += HandlePlayerChanged;
+        // 左上角曾經還有一塊 430x116 的徽章（頭像、名字、評分）。它被拿掉了，因為
+        // 左下這塊牌已經把同樣的東西講完而且講得更完整 —— 同一個畫面上同一件事寫
+        // 兩次不是強調，是沒收拾。而且它的錨點在左邊、分組鈕的錨點在中間，畫面一
+        // 窄就一定會疊在一起（5:4 的邏輯畫布只有 2148 寬，分組鈕會跑到 x=228，整個
+        // 壓進徽章裡）。
+        //
+        // 改名和換頭像的入口跟著搬到左邊那塊牌的肖像上 —— 點自己的臉去改自己的
+        // 臉，比藏在設定第二十六列裡好找，而設定頁的索引是寫死的、插一列會把後面
+        // 全部推掉。
+        // 頭像餵給那塊牌。圖在存檔的時候就切成圓的了，所以直接填滿內壁。
+        // 左下角那一條檢定 —— 不是那塊被拿掉的徽章的翻版。它和分組鈕的碰撞
+        // 是照那次的教訓一開始就算好的：它量實際畫布寬度，窄到放不下就縮成一枚和右
+        // 上設定書籤同尺寸的書籤（見 SyllabusPlaque）。
+        SyllabusPlaque.Attach(selectionPanel.GetComponent<RectTransform>());
         RefreshRecitalToggle();
 
         LoadSongOptions();
@@ -417,6 +486,24 @@ public class SongSelectionManager : MonoBehaviour
         UpdateCarouselVisuals();
         ShowSelection();
         RuntimeSongLibraryPanel.Attach(this, selectionPanel);
+
+        // 考程在曲庫載完之後就編定，不是等玩家翻開考程書才編。
+        //
+        // 不先編的話，左上那塊牌和練習室那塊牌在第一次開遊戲時會印「曲庫不足」——
+        // 而真正的原因是「還沒編」。一塊說謊的牌比一塊空的牌糟。成本是換了曲庫才
+        // 付一次（見 SyllabusCourses.LibraryStamp），而且攤在好幾個 frame 上。
+        if (SyllabusCourses.NeedsDraft(this))
+            StartCoroutine(SyllabusCourses.DraftRoutine(this, null));
+
+        // 第一次開遊戲先請他報上名來。
+        //
+        // 畫面上開始有「演奏者資料」「你的評分」「上次挑戰」之後，那個「你」必須
+        // 有名字 —— 一塊寫著「演奏者」的銘牌和一塊空白的銘牌一樣沒有份量。名字只
+        // 留在這台電腦上，和成績、評分同一個位置（見 PlayerProfile）。
+        PlayerProfileCard.ShowIfNew(() =>
+        {
+            if (rail != null) rail.RefreshRecord();
+        });
     }
 
     private void ApplyClassicalBookTheme()
@@ -655,19 +742,38 @@ public class SongSelectionManager : MonoBehaviour
             rootObject.layer = selectionPanel.layer;
             categoryCarouselRoot = rootObject.GetComponent<RectTransform>();
             categoryCarouselRoot.SetParent(selectionPanel.transform, false);
-            categoryCarouselRoot.anchorMin = new Vector2(0.30f, 1f);
-            categoryCarouselRoot.anchorMax = new Vector2(0.70f, 1f);
+            // 固定尺寸，不是螢幕的百分比。
+            //
+            // 面板原本被鎖成正方形，所以這條用分數錨點量出來的寬度會**隨螢幕變寬
+            // 而變窄**（16:9 佔螢幕 22.5%、21:9 只剩 17.1%）—— 整條頁首因此永遠只
+            // 有畫面中間一小截，兩側是大片裸照片。改成固定 1180 之後，可見的分類
+            // 數從 1.67 個變成 3.3 個。
+            //
+            // 高度 58 換算成實體像素是 43.5，剛好在 44 的觸控門檻底下；加到 76。
+            categoryCarouselRoot.anchorMin = new Vector2(0.5f, 1f);
+            categoryCarouselRoot.anchorMax = new Vector2(0.5f, 1f);
             categoryCarouselRoot.pivot = new Vector2(0.5f, 1f);
-            categoryCarouselRoot.anchoredPosition = new Vector2(0f, -72f);
-            categoryCarouselRoot.sizeDelta = new Vector2(0f, 58f);
+            // 分類離開簾桿，落到簾幕底下。
+            //
+            // 它是「要讀的東西」不是桿上的五金 —— 掛在桿上的時候它和旁邊四顆按鈕
+            // 同高同色，讀起來是第六顆鈕，但它其實是一個顯示器。位置：簾桿 160 +
+            // 簷幕約 250，所以 430 是它剛好落在布緣底下的第一個位置。
+            categoryCarouselRoot.anchoredPosition = new Vector2(0f, -CategoryTop);
+            // 從 1180 收到 860：一條分類名不需要這麼寬，而模式鈕改成漏斗圖示之後
+            // 又省下 180。槽越寬，它就越像一條橫在畫面中央的帶子。
+            categoryCarouselRoot.sizeDelta = new Vector2(640f, 76f);
 
             Image background = rootObject.GetComponent<Image>();
-            background.sprite = ClassicalBookUITheme.GetPaperTextureSprite();
-            background.type = Image.Type.Tiled;
-            background.color = new Color(0.16f, 0.07f, 0.035f, 0.96f);
+            ClassicalBookUITheme.ApplyDarkSurface(background,
+                new Color(0.13f, 0.055f, 0.028f, 0.97f), ClassicalBookUITheme.Surface.Paper, 3.5f);
+            // 金框拿掉 —— 一圈金線是「這塊會動」的訊號，而這一塊是顯示器。改成凹
+            // 槽：上緣一條暗線是內陰影，下緣一條亮線是槽底受光，所以它讀起來是挖
+            // 進去的，不是浮上來的。
             Outline outline = rootObject.GetComponent<Outline>();
-            outline.effectColor = ClassicalBookUITheme.Gold;
-            outline.effectDistance = new Vector2(2f, -2f);
+            outline.effectColor = new Color(0f, 0f, 0f, 0.55f);
+            outline.effectDistance = new Vector2(0f, -3f);
+            SlotEdge(categoryCarouselRoot, 1f, new Color(0.02f, 0.01f, 0.005f, 0.85f));
+            SlotEdge(categoryCarouselRoot, 0f, new Color(0.42f, 0.33f, 0.18f, 0.9f));
 
             previousCategoryButton = CreateCategoryButton(categoryCarouselRoot, "PreviousCategory", "<", true);
             nextCategoryButton = CreateCategoryButton(categoryCarouselRoot, "NextCategory", ">", false);
@@ -677,21 +783,42 @@ public class SongSelectionManager : MonoBehaviour
             labelObject.layer = rootObject.layer;
             RectTransform labelRect = labelObject.GetComponent<RectTransform>();
             labelRect.SetParent(categoryCarouselRoot, false);
-            labelRect.anchorMin = new Vector2(0.14f, 0f);
-            labelRect.anchorMax = new Vector2(0.86f, 1f);
+            labelRect.anchorMin = new Vector2(0.03f, 0f);
+            labelRect.anchorMax = new Vector2(0.97f, 1f);
             labelRect.offsetMin = new Vector2(8f, 4f);
             labelRect.offsetMax = new Vector2(-8f, -4f);
             categoryCarouselLabel = labelObject.GetComponent<TextMeshProUGUI>();
             categoryCarouselLabel.alignment = TextAlignmentOptions.Center;
             categoryCarouselLabel.enableAutoSizing = true;
-            categoryCarouselLabel.fontSizeMin = 17f;
-            categoryCarouselLabel.fontSizeMax = 27f;
+            // 收小一階：槽窄了之後 27 級的字把整條塔滿，讀起來是標題不是顯示器。
+            categoryCarouselLabel.fontSizeMin = 15f;
+            categoryCarouselLabel.fontSizeMax = 21f;
             categoryCarouselLabel.fontStyle = FontStyles.Bold | FontStyles.SmallCaps;
             categoryCarouselLabel.color = ClassicalBookUITheme.ParchmentLight;
             categoryCarouselLabel.raycastTarget = false;
         }
 
         EnsureRecitalToggle();
+        // 簷幕要壓在曲目卡上面，分類列再壓在簷幕上面。
+        //
+        // 場景裡作者擺的曲目卡 sibling index 比執行期才加的氛圍包高，所以簷
+        // 幕留在氛圍裡的話，中央那張卡會把布挖掉一塊直角矩形，透過它看到
+        // 的就是房間照片。台口的簷幕要在舞台上所有東西前面。
+        //
+        // 順序寫在這裡而不是建立的地方，是因為這支式子每次重建分類列都會跑
+        // 一次，兩行連著寫才不會被後面那一行推翻。
+        if (selectionAtmosphere != null && selectionAtmosphere.Valance != null)
+            selectionAtmosphere.Valance.SetAsLastSibling();
+
+        // 分類收進捲簾裡：平常只留一條拉繩，拉一下才從上面那條白樺
+        // 底下捲出來。和練習室的篩選抽屜同一個手勢。
+        //
+        // Attach 會把 categoryCarouselRoot 改掛到簾子底下，所以接下來要排到最上層的
+        // 是簾子，槽本身的 SetAsLastSibling 現在只在簾子內部生效。
+        categoryBlind = RecitalCategoryBlind.Attach(
+            selectionPanel.GetComponent<RectTransform>(), categoryCarouselRoot,
+            CategoryTop, categoryCarouselRoot.sizeDelta.y);
+        if (categoryBlind != null) categoryBlind.transform.SetAsLastSibling();
         categoryCarouselRoot.SetAsLastSibling();
         if (recitalToggleRoot != null) recitalToggleRoot.SetAsLastSibling();
         if (previousCategoryButton != null)
@@ -733,55 +860,20 @@ public class SongSelectionManager : MonoBehaviour
     /// side when the song starts. That is the whole feedback: no dialog, no
     /// caption -- you prepare in one room and perform in the other.
     /// </remarks>
+    /// <summary>
+    /// 演奏會開關已經退場，改由簾桿最左那顆「前往練習模式」代替。
+    /// </summary>
+    /// <remarks>
+    /// 它本來是一顆 on/off 的開關，掛在報頭右端。但在演奏廳這個畫面上，關掉演奏會
+    /// 等於<b>離開這個房間</b> —— 那是一個去處，不是一個狀態，所以它該長得像一扇
+    /// 門、放在桿的左端（離「挑歌」最遠的地方），而不是一個和分類並排的切換。
+    ///
+    /// 方法留成空殼而不是整段刪掉：<c>EnsureRecitalToggle</c> 和
+    /// <c>RefreshRecitalToggle</c> 加起來在八個地方被呼叫，而它們每一個都已經檢查過
+    /// null。留一個不做事的空殼，比在八個呼叫點各拆一次安全。
+    /// </remarks>
     private void EnsureRecitalToggle()
     {
-        if (selectionPanel == null || categoryCarouselRoot == null) return;
-        if (recitalToggleRoot == null)
-        {
-            GameObject rootObject = new GameObject("RecitalToggle", typeof(RectTransform),
-                typeof(CanvasRenderer), typeof(Image), typeof(Outline), typeof(Button));
-            rootObject.layer = selectionPanel.layer;
-            recitalToggleRoot = rootObject.GetComponent<RectTransform>();
-            recitalToggleRoot.SetParent(selectionPanel.transform, false);
-            // 貼著分類條的右緣，同一個高度、同一條基線。
-            recitalToggleRoot.anchorMin = new Vector2(0.705f, 1f);
-            recitalToggleRoot.anchorMax = new Vector2(0.815f, 1f);
-            recitalToggleRoot.pivot = new Vector2(0.5f, 1f);
-            recitalToggleRoot.anchoredPosition = new Vector2(0f, -72f);
-            recitalToggleRoot.sizeDelta = new Vector2(0f, 58f);
-
-            recitalToggleFace = rootObject.GetComponent<Image>();
-            recitalToggleFace.sprite = ClassicalBookUITheme.GetPaperTextureSprite();
-            recitalToggleFace.type = Image.Type.Tiled;
-            recitalToggleEdge = rootObject.GetComponent<Outline>();
-            recitalToggleEdge.effectDistance = new Vector2(2f, -2f);
-
-            GameObject labelObject = new GameObject("RecitalLabel", typeof(RectTransform),
-                typeof(CanvasRenderer), typeof(TextMeshProUGUI));
-            labelObject.layer = rootObject.layer;
-            RectTransform labelRect = labelObject.GetComponent<RectTransform>();
-            labelRect.SetParent(recitalToggleRoot, false);
-            labelRect.anchorMin = Vector2.zero;
-            labelRect.anchorMax = Vector2.one;
-            labelRect.offsetMin = new Vector2(8f, 4f);
-            labelRect.offsetMax = new Vector2(-8f, -4f);
-            recitalToggleLabel = labelObject.GetComponent<TextMeshProUGUI>();
-            recitalToggleLabel.alignment = TextAlignmentOptions.Center;
-            recitalToggleLabel.enableAutoSizing = true;
-            recitalToggleLabel.fontSizeMin = 13f;
-            recitalToggleLabel.fontSizeMax = 21f;
-            recitalToggleLabel.fontStyle = FontStyles.Bold | FontStyles.SmallCaps;
-            recitalToggleLabel.raycastTarget = false;
-
-            Button button = rootObject.GetComponent<Button>();
-            button.targetGraphic = recitalToggleFace;
-            button.transition = Selectable.Transition.None;
-            button.onClick.AddListener(ToggleRecitalMode);
-            // 教學曲會把開關鎖成課程規定的樣子，所以換卡片時要重畫。
-            OnSelectionChanged += _ => RefreshRecitalToggle();
-        }
-
-        RefreshRecitalToggle();
     }
 
     /// <summary>
@@ -797,8 +889,14 @@ public class SongSelectionManager : MonoBehaviour
         SettingsManager settings = SettingsManager.Instance;
         if (settings == null) return;
         // 教學曲的模式由課程決定，開關鎖住。
-        if (IsTutorialOption(GetSelectedSong())) return;
+        if (IsTutorialOption(GetSelectedSong()))
+        {
+            // 「按不動」也要有回應。沒有聲音的話，使用者只會以為自己沒按到。
+            UiSfx.Denied();
+            return;
+        }
         bool recital = !settings.RecitalMode;
+        UiSfx.Toggle(recital);
         settings.SetRecitalMode(recital);
         RefreshRecitalToggle();
 
@@ -820,33 +918,90 @@ public class SongSelectionManager : MonoBehaviour
         bool locked = IsTutorialOption(GetSelectedSong(), out TutorialSession.RecitalRule rule);
         if (locked) on = rule == TutorialSession.RecitalRule.Always;
 
-        if (recitalToggleFace != null)
-            recitalToggleFace.color = on
-                ? new Color(0.28f, 0.14f, 0.055f, 0.98f)
-                : new Color(0.16f, 0.07f, 0.035f, 0.96f);
-        if (recitalToggleEdge != null)
-            recitalToggleEdge.effectColor = on
-                ? ClassicalBookUITheme.Gold
-                : new Color(ClassicalBookUITheme.Gold.r * 0.45f, ClassicalBookUITheme.Gold.g * 0.45f,
-                    ClassicalBookUITheme.Gold.b * 0.45f, 1f);
+        // 鎖住就真的按不動：上一版只是把字調淡，滑鼠移上去照樣有反應、點下去也
+        // 照樣接受，只是什麼都不會發生。
+        // 鎖住的時候**不**把 interactable 關掉。
+        //
+        // 關掉的話 uGUI 根本不會把點擊送進來，連「按不動」那一聲都發不出去 ——
+        // 使用者只會覺得自己沒點到。改成照收點擊、在 ToggleRecitalMode 開頭擋下
+        // 來並回一聲悶響，整顆的變暗由 RecitalToggleGlow 負責。
+        if (recitalToggleButton != null) recitalToggleButton.interactable = true;
+
         if (recitalToggleLabel != null)
         {
+            // 文案配合 20 級的固定字級收短，不然括號那兩個長的會被收尾。
+            // 牌面可用寬度是 (0.815−0.705)×1440 − 16 ≈ 142 單位，20 級的大寫拉丁
+            // 字平均 0.6em，所以英文最多放得下十一、二個字元 —— 「RECITAL · LESSON」
+            // 要 196，一定會被收尾。鎖住這件事已經由「按不動＋整顆變暗」講了，英
+            // 文就不重複講一次。
             recitalToggleLabel.text = !locked
-                ? Localize.T("演奏會模式", "演奏会模式", "RECITAL")
+                ? Localize.T("演奏會", "演奏会", "RECITAL")
                 : rule == TutorialSession.RecitalRule.Always
-                    ? Localize.T("演奏會（課程）", "演奏会（课程）", "RECITAL (LESSON)")
+                    ? Localize.T("演奏會·課程", "演奏会·课程", "RECITAL")
                     : rule == TutorialSession.RecitalRule.Partly
-                        ? Localize.T("依課程切換", "依课程切换", "BY LESSON")
-                        : Localize.T("一般（課程）", "一般（课程）", "STANDARD (LESSON)");
-            recitalToggleLabel.color = on
-                ? new Color(1f, 0.88f, 0.62f, 1f)
-                : new Color(0.62f, 0.55f, 0.45f, 1f);
-            // 鎖住的時候淡一點，看得出來按不動。
-            if (locked) recitalToggleLabel.color *= new Color(1f, 1f, 1f, 0.7f);
+                        ? Localize.T("依課程", "依课程", "BY LESSON")
+                        : Localize.T("一般·課程", "一般·课程", "STANDARD");
             ClassicalBookUITheme.ApplyLocalizedFont(recitalToggleLabel);
         }
 
-        if (selectionAtmosphere != null) selectionAtmosphere.SetRecitalRoom(on);
+        // 顏色、滑過、按下、鎖住全部交給元件走同一條曲線。
+        //
+        // ready 只在**開關真的存在**之後才算數：Start 會在建出開關之前先叫一次
+        // RefreshRecitalToggle，那一次如果就把旗標設起來，第一次畫的時候反而會演
+        // 一段 160ms 的開關動畫，而且房間會無緣無故淡一次。
+        bool first = !recitalToggleReady;
+        if (recitalToggleGlow != null)
+        {
+            recitalToggleGlow.SetState(on, locked, first);
+            recitalToggleReady = true;
+        }
+
+        if (selectionAtmosphere != null)
+        {
+            selectionAtmosphere.SetRecitalRoom(on, first);
+            // 簷幕跟著房間走：台口的布只在演奏會模式有意義。
+            selectionAtmosphere.SetValanceVisible(on);
+        }
+    }
+
+    /// <summary>分類槽的上下兩條邊：上緣暗（內陰影）、下緣亮（槽底受光）。</summary>
+    private static void SlotEdge(RectTransform slot, float side, Color colour)
+    {
+        var edge = new GameObject("SlotEdge", typeof(RectTransform), typeof(CanvasRenderer),
+            typeof(Image));
+        edge.layer = slot.gameObject.layer;
+        var rect = edge.GetComponent<RectTransform>();
+        rect.SetParent(slot, false);
+        rect.anchorMin = new Vector2(0f, side);
+        rect.anchorMax = new Vector2(1f, side);
+        rect.pivot = new Vector2(0.5f, side);
+        rect.anchoredPosition = Vector2.zero;
+        rect.sizeDelta = new Vector2(0f, side > 0.5f ? 3f : 2f);
+        Image image = edge.GetComponent<Image>();
+        image.color = colour;
+        image.raycastTarget = false;
+    }
+
+    /// <summary>
+    /// 離開演奏廳、回練習室。簾桿最左那顆按的就是這個。
+    /// </summary>
+    /// <remarks>
+    /// 語意和舊的開關關掉時一樣（設定改掉、練習室蓋上來），只是它現在是一個明確的
+    /// 去處而不是一個狀態的另一半。
+    /// </remarks>
+    public void LeaveForPracticeRoom()
+    {
+        SettingsManager settings = SettingsManager.Instance;
+        // 教學曲的模式由課程決定，不讓它被這顆按鈕推翻。
+        if (IsTutorialOption(GetSelectedSong()))
+        {
+            UiSfx.Denied();
+            return;
+        }
+        UiSfx.Toggle(false);
+        if (settings != null) settings.SetRecitalMode(false);
+        RefreshRecitalToggle();
+        PracticeRoomScreen.Open();
     }
 
     private Button CreateCategoryButton(RectTransform parent, string objectName, string caption, bool left)
@@ -854,10 +1009,18 @@ public class SongSelectionManager : MonoBehaviour
         GameObject buttonObject = new GameObject(objectName, typeof(RectTransform),
             typeof(CanvasRenderer), typeof(Image), typeof(Button));
         buttonObject.layer = parent.gameObject.layer;
+        // 和桿上那幾顆同一種鑄板：斜接的黃銅、有方向性的鎏金線腳、四角鉚釘。平色
+        // 加一圈外框的那一版在這間房裡讀起來像沒做完。
+        ClassicalBookUITheme.StylePlate(buttonObject.GetComponent<Image>(), false);
         RectTransform rect = buttonObject.GetComponent<RectTransform>();
         rect.SetParent(parent, false);
-        rect.anchorMin = new Vector2(left ? 0f : 0.86f, 0f);
-        rect.anchorMax = new Vector2(left ? 0.14f : 1f, 1f);
+        // 箭頭放在槽**外面**。
+        //
+        // 放在裡面的時候它們和分類名共用同一塊底，所以整條讀起來是一顆很寬的按鈕；
+        // 移出來之後「要讀的」（槽）和「要按的」（兩顆鈕）就分開了。0.062 的跨距在
+        // 1180 寬的槽上是 73 單位，扣掉內縮剩 65。
+        rect.anchorMin = new Vector2(left ? -0.0705f : 1.0085f, 0f);
+        rect.anchorMax = new Vector2(left ? -0.0085f : 1.0705f, 1f);
         rect.offsetMin = new Vector2(4f, 4f);
         rect.offsetMax = new Vector2(-4f, -4f);
 
@@ -1368,6 +1531,16 @@ public class SongSelectionManager : MonoBehaviour
         if (centerSlot?.root != null) centerBookRestPosition = centerSlot.root.anchoredPosition;
         if (leftSlot?.root != null) leftBookRestPosition = leftSlot.root.anchoredPosition;
         if (rightSlot?.root != null) rightBookRestPosition = rightSlot.root.anchoredPosition;
+
+        // 整排往下讓，讓出簾桿與簾幕的高度（見 CarouselDrop）。在這裡調而不是去改
+        // 場景裡那三個 slot：場景是作者擺的姿勢，而這一段位移是版面的決定 —— 混在
+        // 一起的話，日後有人在場景裡挪一下卡片，就再也看不出偏移是誰加的。
+        centerBookRestPosition.y -= CarouselDrop;
+        leftBookRestPosition.y -= CarouselDrop;
+        rightBookRestPosition.y -= CarouselDrop;
+        if (centerSlot?.root != null) centerSlot.root.anchoredPosition = centerBookRestPosition;
+        if (leftSlot?.root != null) leftSlot.root.anchoredPosition = leftBookRestPosition;
+        if (rightSlot?.root != null) rightSlot.root.anchoredPosition = rightBookRestPosition;
         bookRestPoseCached = true;
 
         // The authored left/right rest positions define one "song" of travel.
@@ -2164,6 +2337,12 @@ public class SongSelectionManager : MonoBehaviour
         // 和換歌，關掉檢視器才發現選到別首去了。拖曳同理。
         if (ChartOverviewViewer.Instance != null && ChartOverviewViewer.Instance.IsOpen) return;
 
+        // 樂譜書同理。它是全畫面的覆蓋層，但開書的時候沒有關掉 selectionPanel，
+        // 而滾輪是直接讀滑鼠的 —— 在書上滾一格，底下的轉盤會跟著換歌，關掉書才
+        // 發現選到別首去了。
+        if (SongScoreBookOverlay.IsOpen) return;
+        if (SyllabusBookOverlay.IsOpen) return;
+
         float deltaTime = Mathf.Min(Time.unscaledDeltaTime, 0.05f);
         ReadPointer(out bool pointerPressed, out Vector2 pointerPosition);
         float wheelDelta = ReadWheelDelta();
@@ -2235,8 +2414,27 @@ public class SongSelectionManager : MonoBehaviour
         inlineDifficultyListRoot.gameObject.SetActive(false);
     }
 
+    /// <summary>轉盤的指標：先問手指，沒有手指才問滑鼠。</summary>
+    /// <remarks>
+    /// **這個畫面原本只認得滑鼠。** 整個專案一行 `Touchscreen` 都沒有，而這裡讀到
+    /// 的指標同時餵給拖曳、滾輪和分類條 —— 觸控螢幕上能動，純粹是因為 Windows 會
+    /// 把沒有處理 WM_POINTER 的視窗的觸控升級成滑鼠訊息。那是別人幫忙，不是支援：
+    /// 一旦平台不這麼做（或 Unity 自己接管了觸控），整張轉盤就拖不動了。
+    ///
+    /// 有手指的時候就**完全不看滑鼠**，不能兩邊相加 —— 升級成滑鼠訊息的平台上，
+    /// 同一根手指會被算兩次，拖曳距離變兩倍。
+    /// </remarks>
     private static void ReadPointer(out bool pressed, out Vector2 screenPosition)
     {
+    #if ENABLE_INPUT_SYSTEM
+        Touchscreen touch = Touchscreen.current;
+        if (touch != null && touch.primaryTouch.press.isPressed)
+        {
+            pressed = true;
+            screenPosition = touch.primaryTouch.position.ReadValue();
+            return;
+        }
+    #endif
     #if ENABLE_INPUT_SYSTEM && !ENABLE_LEGACY_INPUT_MANAGER
         pressed = Mouse.current != null && Mouse.current.leftButton.isPressed;
         screenPosition = Mouse.current != null ? Mouse.current.position.ReadValue() : Vector2.zero;
@@ -2292,6 +2490,14 @@ public class SongSelectionManager : MonoBehaviour
 
     private static float ReadWheelDelta()
     {
+    #if ENABLE_INPUT_SYSTEM
+        // 手指在螢幕上的時候沒有滾輪。有些裝置會同時回報一個殘留的滾輪值，那會讓
+        // 轉盤在拖曳的同時又被推一格。
+        if (Touchscreen.current != null && Touchscreen.current.primaryTouch.press.isPressed)
+        {
+            return 0f;
+        }
+    #endif
     #if ENABLE_INPUT_SYSTEM && !ENABLE_LEGACY_INPUT_MANAGER
         return Mouse.current != null ? Mouse.current.scroll.ReadValue().y : 0f;
     #elif ENABLE_INPUT_SYSTEM && ENABLE_LEGACY_INPUT_MANAGER
@@ -2506,6 +2712,7 @@ public class SongSelectionManager : MonoBehaviour
     private void PlayPreviewForOption(SongOption option, bool restart)
     {
         EnsurePreviewSources();
+        previewFadeToken++;         // 取消還在跑的淡出，不然它等一下會把新的停掉
             BuildLogger.Log($"SongSelectionManager: PlayPreviewForOption called. restart={restart} option={(option != null ? option.displayName : "null")}");
         currentPreviewOption = option;
 
@@ -2585,8 +2792,11 @@ public class SongSelectionManager : MonoBehaviour
             previewAudioSource.Stop();
             previewAudioSource.clip = mainClip;
             previewAudioSource.time = 0f;
-            previewAudioSource.volume = mainVolume;
+            // 從零淡進來。音訊的硬切就是「啪」的一聲：波形在非零的地方被接上，那
+            // 個不連續點本身是一個寬頻脈衝。
+            previewAudioSource.volume = 0f;
             previewAudioSource.Play();
+            fadeInPending = true;
             Debug.Log($"[SongSelectionManager] Preview playback started: clip='{mainClip.name}' state={mainClip.loadState} volume={previewAudioSource.volume:0.###} mute={previewAudioSource.mute} active={previewAudioSource.gameObject.activeInHierarchy} substituted={substituted}");
         }
         else
@@ -2619,12 +2829,22 @@ public class SongSelectionManager : MonoBehaviour
                 previewPianoAudioSource.Stop();
                 previewPianoAudioSource.clip = null;
             }
+            if (fadeInPending)
+            {
+                fadeInPending = false;
+                FadeInPreviewAudio(mainVolume, 0f);
+            }
             return;
         }
 
         var pianoSource = EnsurePianoPreviewSource();
         if (pianoSource == null)
         {
+            if (fadeInPending)
+            {
+                fadeInPending = false;
+                FadeInPreviewAudio(mainVolume, 0f);
+            }
             return;
         }
 
@@ -2635,14 +2855,84 @@ public class SongSelectionManager : MonoBehaviour
             pianoSource.Stop();
             pianoSource.clip = option.pianoAudioClip;
             pianoSource.time = 0f;
-            pianoSource.volume = pianoVolume;
+            // 主軌是從 0 淡進來的，鋼琴軌也要 —— 用全音量起跑的話，淡入的協程在
+            // 下一幀才會抓到它，中間那一幀會先爆一聲全音量的鋼琴。
+            pianoSource.volume = 0f;
             pianoSource.Play();
-                BuildLogger.Log($"SongSelectionManager: Started piano preview for '{option.displayName}' clip={pianoSource.clip?.name} volume={pianoSource.volume}");
+                BuildLogger.Log($"SongSelectionManager: Started piano preview for '{option.displayName}' clip={pianoSource.clip?.name}");
         }
-        else
+        else if (!fadeInPending)
         {
             pianoSource.volume = pianoVolume;
         }
+
+        // 兩軌都就位了才開始淡：淡入的起點是「現在的音量」，早一步叫的話它會把
+        // 鋼琴軌的起點記成上一首留下來的值。
+        if (fadeInPending)
+        {
+            fadeInPending = false;
+            FadeInPreviewAudio(mainVolume, pianoVolume);
+        }
+    }
+
+    private bool fadeInPending;
+    private int previewFadeToken;
+    private Coroutine previewFadeRoutine;
+    private Coroutine selectionRevealRoutine;
+
+    /// <summary>試聽淡進來。兩軌共用同一條斜坡，比例維持不變。</summary>
+    private void FadeInPreviewAudio(float mainTarget, float pianoTarget)
+    {
+        int token = ++previewFadeToken;
+        if (previewFadeRoutine != null) StopCoroutine(previewFadeRoutine);
+        previewFadeRoutine = StartCoroutine(FadePreviewRoutine(token, mainTarget, pianoTarget, 0.18f, false));
+    }
+
+    /// <summary>淡出再停。</summary>
+    /// <remarks>
+    /// **不能提早停。** StopPreviewAudio 會順手 ReleasePreviewClipData 把取樣資料
+    /// 卸掉，在淡完之前放掉的話，淡到一半整段會直接靜音 —— 那比硬切還糟。
+    /// </remarks>
+    private void FadeOutPreviewAudio()
+    {
+        if (previewAudioSource == null || !previewAudioSource.isPlaying)
+        {
+            StopPreviewAudio();
+            return;
+        }
+        int token = ++previewFadeToken;
+        if (previewFadeRoutine != null) StopCoroutine(previewFadeRoutine);
+        previewFadeRoutine = StartCoroutine(FadePreviewRoutine(token, 0f, 0f, 0.12f, true));
+    }
+
+    private IEnumerator FadePreviewRoutine(int token, float mainTarget, float pianoTarget,
+        float span, bool stopAtEnd)
+    {
+        float mainFrom = previewAudioSource != null ? previewAudioSource.volume : 0f;
+        float pianoFrom = previewPianoAudioSource != null ? previewPianoAudioSource.volume : 0f;
+        float elapsed = 0f;
+        while (elapsed < span)
+        {
+            if (token != previewFadeToken)
+            {
+                previewFadeRoutine = null;
+                yield break;
+            }
+            elapsed += Time.unscaledDeltaTime;
+            // 音量走線性：耳朵聽起來比緩出自然，緩出的尾巴會拖成一條細殘響。
+            float k = Mathf.Clamp01(elapsed / span);
+            if (previewAudioSource != null)
+                previewAudioSource.volume = Mathf.Lerp(mainFrom, mainTarget, k);
+            if (previewPianoAudioSource != null && previewPianoAudioSource.isPlaying)
+                previewPianoAudioSource.volume = Mathf.Lerp(pianoFrom, pianoTarget, k);
+            yield return null;
+        }
+        previewFadeRoutine = null;
+        if (token != previewFadeToken) yield break;
+        if (previewAudioSource != null) previewAudioSource.volume = mainTarget;
+        if (previewPianoAudioSource != null && previewPianoAudioSource.isPlaying)
+            previewPianoAudioSource.volume = pianoTarget;
+        if (stopAtEnd) StopPreviewAudio();
     }
 
     private void StopPreviewAudio(AudioClip preserveMain = null, AudioClip preservePiano = null)
@@ -2789,10 +3079,14 @@ public class SongSelectionManager : MonoBehaviour
             try
             {
                 byte[] bytes = File.ReadAllBytes(externalPath);
-                var texture = new Texture2D(2, 2, TextureFormat.RGBA32, false);
-                if (texture.LoadImage(bytes))
+                // 曲繪在轉盤上會被連續縮放（側卡比中央卡小），沒有 mipmap 的話
+                // 每一幀都在不同的子像素上重新取樣，細節會沿著邊緣爬。
+                var texture = new Texture2D(2, 2, TextureFormat.RGBA32, true);
+                if (texture.LoadImage(bytes, true))
                 {
                     texture.name = Path.GetFileNameWithoutExtension(externalPath);
+                    texture.filterMode = FilterMode.Trilinear;
+                    texture.anisoLevel = 4;
                     var externalSprite = Sprite.Create(texture, new Rect(0, 0, texture.width, texture.height),
                         new Vector2(0.5f, 0.5f), 100f);
                     _spriteCache[resourcePath] = externalSprite;
@@ -3099,7 +3393,7 @@ public class SongSelectionManager : MonoBehaviour
         carouselMoving = true;
         carouselTransitioning = true;
         CancelCarouselAudioLoad();
-        StopPreviewAudio();
+        FadeOutPreviewAudio();
         HideChartAnalysis();
         // The bookmark list is rebuilt from scratch per song, far too expensive
         // to follow a moving card.  Hide it until the scroll settles.
@@ -3113,7 +3407,16 @@ public class SongSelectionManager : MonoBehaviour
         if (songOptions.Count == 0) return;
 
         songScroller.Tick(deltaTime, out bool baseChanged, out bool settled);
-        if (baseChanged) OnCarouselBaseIndexChanged();
+        if (baseChanged)
+        {
+            // 聲音只接在**真的滾過一張**的這一條路上。
+            //
+            // OnCarouselBaseIndexChanged 同時也是重建用的路（EnsureCarouselContents
+            // 那一條），而重建會在啟動、換語言、點一首歌、切分類的時候各跑一次 ——
+            // 接在那裡的話，玩家開遊戲的第一個動作還沒做就先聽到一聲「你捲動了」。
+            UiSfx.Move();
+            OnCarouselBaseIndexChanged();
+        }
         if (settled) CommitCarouselFocus();
     }
 
@@ -3256,7 +3559,7 @@ public class SongSelectionManager : MonoBehaviour
             graphic.raycastTarget = false;
         }
 
-        return new SongPreviewSlot
+        var slot = new SongPreviewSlot
         {
             root = root,
             coverImage = FindByPath<Image>(root, coverPath),
@@ -3264,6 +3567,10 @@ public class SongSelectionManager : MonoBehaviour
             difficultyLabel = FindByPath<TextMeshProUGUI>(root, difficultyPath),
             authorLabel = FindByPath<TextMeshProUGUI>(root, authorPath),
         };
+        // 曲繪的金邊是執行期綁的（見 CoverEdgeFit），而 Instantiate 只複製序列化
+        // 欄位 —— 複製過去的那一份參照全是 null，最外面兩張卡會永遠沒有金邊。
+        ClassicalBookUITheme.EnsureCoverEdge(slot.coverImage);
+        return slot;
     }
 
     private static string GetRelativePath(Transform root, Transform target)
@@ -3335,6 +3642,13 @@ public class SongSelectionManager : MonoBehaviour
                 new Vector2(carouselSlotSpacing * distance, Mathf.Lerp(centerY, sideY, eased));
             card.slot.root.localScale = Vector3.one * Mathf.Lerp(centerScale, sideScale, eased);
             if (card.group != null) card.group.alpha = alpha;
+            // 只有中央和左右鄰卡接得到手指。
+            //
+            // role ±2 的幽靈卡在 16:9 靜止時在螢幕外，但捲動途中會進到畫面裡，而
+            // 且它的難度寶石是**後來**才由 UpdatePreviewSlot 長出來的 —— 複製卡片
+            // 時那一輪關閉 raycast 的掃描根本還沒看到它們。不擋的話，捲動中段點下
+            // 去會點到一顆看不見的寶石。
+            if (card.group != null) card.group.blocksRaycasts = absDistance < 1.5f;
         }
     }
 
@@ -3365,7 +3679,15 @@ public class SongSelectionManager : MonoBehaviour
     {
         // Let the final book pose reach the screen before any Resources/audio
         // work begins.  This guarantees that loading cannot interrupt movement.
-        yield return null;
+        //
+        // 而且要等手真的停下來：瀏覽的時候使用者還沒決定要聽哪一首，掃過十首不該
+        // 換來十次讀檔和解碼。版本號在這段等待之後要重驗一次。
+        yield return new WaitForSecondsRealtime(0.18f);
+        if (requestVersion != carouselAudioLoadVersion)
+        {
+            carouselAudioLoadRoutine = null;
+            yield break;
+        }
 
         if (requestVersion != carouselAudioLoadVersion || carouselTransitioning ||
             requestedIndex != currentIndex || !IsSelectionPanelActive())
@@ -4258,7 +4580,8 @@ public class SongSelectionManager : MonoBehaviour
             if (PracticeRoomScreen.Instance != null) PracticeRoomScreen.Instance.Close();
             return;
         }
-        if (PracticeRoomScreen.Instance == null) PracticeRoomScreen.Open();
+        // 自動落回上次的模式不是使用者的動作，不出聲。
+        if (PracticeRoomScreen.Instance == null) PracticeRoomScreen.Open(false);
     }
 
     public void ShowSelection()
@@ -4275,6 +4598,9 @@ public class SongSelectionManager : MonoBehaviour
         if (selectionPanel != null)
         {
             selectionPanel.SetActive(true);
+            RevealSelection();
+            // 從遊戲或結算回來，紀錄可能變了。掃一次，不進 Update。
+            if (rail != null) rail.RefreshRecord();
         }
 
         if (gameplayPanel != null)
@@ -4301,11 +4627,58 @@ public class SongSelectionManager : MonoBehaviour
         UpdateCarouselVisuals();
     }
 
+    /// <summary>回到選曲畫面：淡進來，不要用跳的。</summary>
+    /// <remarks>
+    /// 從結算或遊戲中回來時，這張轉盤是整片瞬間出現的。淡入的協程掛在管理器上、
+    /// 不是掛在面板上 —— 面板隨時可能被練習室關掉，掛在它身上的協程會被殺掉，然
+    /// 後 alpha 就永遠停在半路。
+    /// </remarks>
+    private void RevealSelection()
+    {
+        if (selectionPanel == null) return;
+        var group = selectionPanel.GetComponent<CanvasGroup>();
+        if (group == null) group = selectionPanel.AddComponent<CanvasGroup>();
+        if (selectionRevealRoutine != null) StopCoroutine(selectionRevealRoutine);
+        selectionRevealRoutine = StartCoroutine(RevealSelectionRoutine(group));
+    }
+
+    private IEnumerator RevealSelectionRoutine(CanvasGroup group)
+    {
+        group.alpha = 0f;
+        // 看不見的畫面不要吃點擊 —— 不然從結算回來的那半秒，點擊會落在還沒淡出
+        // 來的轉盤上。
+        group.blocksRaycasts = false;
+        float elapsed = 0f;
+        const float span = 0.26f;
+        while (elapsed < span)
+        {
+            elapsed += Time.unscaledDeltaTime;
+            group.alpha = 1f - Mathf.Pow(1f - Mathf.Clamp01(elapsed / span), 3f);
+            yield return null;
+        }
+        group.alpha = 1f;
+        group.blocksRaycasts = true;
+        selectionRevealRoutine = null;
+    }
+
     public void HideSelection(AudioClip preserveMain = null, AudioClip preservePiano = null)
     {
         pointerOverCategoryCarousel = false;
         if (selectionPanel != null)
         {
+            // 淡入跑到一半就被藏起來的話，alpha 會停在半路；下次有人直接
+            // SetActive(true)（例如練習室關掉時）就會看到半透明的轉盤。
+            if (selectionRevealRoutine != null)
+            {
+                StopCoroutine(selectionRevealRoutine);
+                selectionRevealRoutine = null;
+            }
+            var group = selectionPanel.GetComponent<CanvasGroup>();
+            if (group != null)
+            {
+                group.alpha = 1f;
+                group.blocksRaycasts = true;
+            }
             selectionPanel.SetActive(false);
         }
 
@@ -4392,9 +4765,21 @@ public class SongSelectionManager : MonoBehaviour
     {
         if (selectionPanel != null)
         {
+            // 淡入跑到一半被藏起來的話，alpha 會停在半路。
+            if (selectionRevealRoutine != null)
+            {
+                StopCoroutine(selectionRevealRoutine);
+                selectionRevealRoutine = null;
+            }
+            var group = selectionPanel.GetComponent<CanvasGroup>();
+            if (group != null)
+            {
+                group.alpha = 1f;
+                group.blocksRaycasts = true;
+            }
             selectionPanel.SetActive(false);
         }
-        StopPreviewAudio();
+        FadeOutPreviewAudio();
     }
 
     /// <summary>
@@ -4405,6 +4790,8 @@ public class SongSelectionManager : MonoBehaviour
         if (selectionPanel != null)
         {
             selectionPanel.SetActive(true);
+            // 練習室關掉時會先叫這裡、再自己淡出 200ms，兩層疊著交接。
+            RevealSelection();
             UpdateCarouselVisuals();
         }
     }

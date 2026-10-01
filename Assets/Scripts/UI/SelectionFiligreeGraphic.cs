@@ -40,12 +40,26 @@ public sealed class SelectionFiligreeGraphic : MaskableGraphic
 {
     private const int StrokeSteps = 18;
 
+    /// <summary>超過這個值的線條才偏色。Wobble 是均勻分布，所以約四分之一會中。</summary>
+    private const float AccentThreshold = 0.72f;
+
+    /// <summary>偏過去的量。</summary>
+    /// <remarks>
+    /// 0.30 太淺：整層的 alpha 只有 0.24，混完再疊到深色照片上，紅褐和黃銅兩條
+    /// 線差不到三個色階（dE 約 3），等於兩個重點色只有一個看得見。拉到 0.52 之後
+    /// 兩者才真的分得開，而 26.7% 的命中率仍然讓整圈框維持金色。
+    /// </remarks>
+    private const float AccentDrift = 0.52f;
+
     [Tooltip("紋樣的主色。象牙金。")]
     [SerializeField] private Color inkColour = new Color(0.91f, 0.85f, 0.68f, 1f);
-    [Tooltip("偶爾偏過去的第二色。藕紫。")]
-    [SerializeField] private Color accentColour = new Color(0.82f, 0.52f, 0.68f, 1f);
-    [Tooltip("偶爾偏過去的第三色。銅青。")]
-    [SerializeField] private Color patinaColour = new Color(0.48f, 0.76f, 0.66f, 1f);
+    // 兩個重點色都只取這間房裡本來就有的東西：皮革、黃銅、舊紙。原本是藕紫和銅
+    // 青 —— 這張照片裡一點都找不到的兩個顏色，於是偏過去的線條不像同一件鎏金家
+    // 具上深淺不同的鏽色，而像另外一盞燈打在框上。
+    [Tooltip("偶爾偏過去的第二色。摩洛哥皮的紅褐。")]
+    [SerializeField] private Color moroccoColour = new Color(0.72f, 0.42f, 0.30f, 1f);
+    [Tooltip("偶爾偏過去的第三色。舊黃銅。")]
+    [SerializeField] private Color brassColour = new Color(0.58f, 0.58f, 0.30f, 1f);
     [Tooltip("難度色混進來的比例。0 = 永遠是金色。")]
     [SerializeField, Range(0f, 1f)] private float difficultyBlend = 0.14f;
     [SerializeField, Range(0f, 0.6f)] private float opacity = 0.24f;
@@ -189,18 +203,26 @@ public sealed class SelectionFiligreeGraphic : MaskableGraphic
             curl * edge.handed, 0.09f, 0.85f, StrandColour(seed, ink), StrokeSteps);
     }
 
-    /// <summary>
-    /// Most strands are ivory; a few drift towards one of the two accents.
-    /// </summary>
+    /// <summary>絕大多數線條就是象牙金，只有少數幾條偏向兩個重點色之一。</summary>
     /// <remarks>
-    /// Chosen per stroke rather than per edge, so the variety shows up inside one
-    /// cluster. Giving every stroke its own hue turns ornament into confetti, so
-    /// the shift is mostly small.
+    /// 取門檻，不是把隨機值直接當混色量。原本是 Lerp(ink, accent, Wobble × 0.85)，
+    /// 而 Wobble 是均勻的 0..1 —— 平均混色量 0.425，意思是**每一條**都被拉過去四
+    /// 成，只是各自深淺不同。註解說的「偶爾偏過去」在畫面上其實是整圈框一半粉一半
+    /// 綠，金色只剩在混色底下。
+    ///
+    /// 改成超過門檻才偏、而且固定只偏 AccentDrift 之後，240 條裡約 64 條會偏：每
+    /// 個角落的 6 條裡 1~2 條，每半邊的 27 條裡 4~12 條 —— 每一叢都有一點變化，而
+    /// 框的顏色仍然是金色。
+    ///
+    /// 挑色逐條而不逐邊，變化才會落在同一叢裡面；也正因為逐條，偏的量才必須壓小：
+    /// 每條各有各的色相就成了彩紙屑，不是紋樣。
     /// </remarks>
     private Color StrandColour(int seed, Color ink)
     {
-        Color accent = OrnamentPen.Wobble(seed, 37) > 0.5f ? accentColour : patinaColour;
-        Color mixed = Color.Lerp(ink, accent, OrnamentPen.Wobble(seed, 31) * 0.85f);
+        if (OrnamentPen.Wobble(seed, 31) <= AccentThreshold) return ink;
+
+        Color accent = OrnamentPen.Wobble(seed, 37) > 0.5f ? moroccoColour : brassColour;
+        Color mixed = Color.Lerp(ink, accent, AccentDrift);
         mixed.a = ink.a;
         return mixed;
     }

@@ -979,6 +979,22 @@ public class NoteController : MonoBehaviour
     private float visibleTailClipMinZ;
     private float visibleTailClipMaxZ;
 
+    /// <summary>
+    /// 畫音符**頭**的那一個 renderer。
+    /// </summary>
+    /// <remarks>
+    /// 給打擊特效那邊定位用。以前是 `GetComponentInChildren<Renderer>()` —— 拿到的是
+    /// 「第一個找到的」，而滑奧的音符底下還掛著連結段，它是斜拉到下一鍵的，
+    /// bounds 中心在兩鍵中間 —— 特效就跟著偏過去半個鍵道。
+    /// 選法和 TryGetVisibleHead 一致。
+    /// </remarks>
+    public Renderer HeadRenderer =>
+        runtimeSpriteRenderer != null && runtimeSpriteRenderer.enabled
+        && runtimeSpriteRenderer.gameObject.activeInHierarchy
+            ? (Renderer)runtimeSpriteRenderer
+            : (noteRenderer != null && noteRenderer.enabled && noteRenderer.gameObject.activeInHierarchy
+                ? noteRenderer : null);
+
     /// <summary>音符頭（含力度光暈，如果有畫）現在畫在世界座標的哪裡。</summary>
     /// <param name="withHalo">true 的話把力度光暈也算進去。</param>
     public bool TryGetVisibleHead(bool withHalo, out Bounds bounds)

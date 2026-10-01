@@ -12,6 +12,8 @@ public class UIManager : MonoBehaviour
     public Button speedDownButton;
     public TextMeshProUGUI speedText;
     private float currentSpeed = 30f; // Default speed changed to match SettingsManager
+    /// <summary>currentSpeed 已經是真正的設定值，不是欄位初始值 30f。</summary>
+    private bool speedResolved;
     // Track last applied/displayed values to avoid redundant updates that may trigger work
     private float lastAppliedSpeed = float.NaN;
     private string lastDisplayedSpeedText = "";
@@ -46,17 +48,7 @@ public class UIManager : MonoBehaviour
         if (restartButton != null) restartButton.onClick.AddListener(RestartGame);
         if (reselectButton != null) reselectButton.onClick.AddListener(ReselectSong);
 
-        if (GameManager.Instance != null)
-        {
-            if (GameManager.Instance.NoteSpawner != null)
-            {
-                currentSpeed = GameManager.Instance.NoteSpawner.speed;
-            }
-            else if (GameManager.Instance.BeatLineSpawner != null)
-            {
-                currentSpeed = GameManager.Instance.BeatLineSpawner.Speed;
-            }
-        }
+        ResolvePlayerSpeed();
 
         UpdateSpeedDependencies();
         UpdateSpeedUI();
@@ -75,6 +67,8 @@ public class UIManager : MonoBehaviour
 
     private void IncreaseSpeed()
     {
+        ResolvePlayerSpeed();
+        speedResolved = true;
         currentSpeed += 10f;
         UpdateSpeedDependencies();
         UpdateSpeedUI();
@@ -82,23 +76,81 @@ public class UIManager : MonoBehaviour
 
     private void DecreaseSpeed()
     {
+        ResolvePlayerSpeed();
+        speedResolved = true;
         currentSpeed = Mathf.Max(1f, currentSpeed - 10f);
         UpdateSpeedDependencies();
         UpdateSpeedUI();
     }
 
+    /// <summary>
+    /// 設定的速度套上這份譜的比例，得到真正送給 spawner 的值。
+    /// </summary>
+    /// <remarks>
+    /// <c>currentSpeed</c> 永遠是玩家調的那個數（畫面上顯示的、±10 加減的也
+    /// 是它），比例只在寫進 spawner 的那一刻乘上去。這樣換一首曲子時比例跟著
+    /// 譜變，而玩家的設定不會被惄掉 —— 若反過來把比例寫回 <c>currentSpeed</c>，
+    /// 每換一首就乘一次，幾首之後就飛了。
+    /// </remarks>
+    /// <summary>
+    /// 把玩家的設定值拉進 <see cref="currentSpeed"/>。
+    /// </summary>
+    /// <remarks>
+    /// **不要從 spawner 讀回來。** spawner 上的值已經乘過譜面比例，讀回來下一次
+    /// 套比例就乘第二次。玩家的設定值只有 SettingsManager 一個來源。
+    ///
+    /// **但不能只在 Start() 拉一次。** 兩個都是 MonoBehaviour，執行順序沒有釘，
+    /// SettingsManager 可能還沒 Awake。那時候拉不到就會把欄位初始值 30f 當成設定
+    /// 值推給 spawner，等 ApplySettings 跑完再推一次 80 —— 畫面上就是流速突然跳一下。
+    /// 所以拉不到就不標記完成，下一次再試。
+    /// </remarks>
+    private void ResolvePlayerSpeed()
+    {
+        if (speedResolved) return;
+        var settings = SettingsManager.Instance;
+        if (settings == null) return;
+        currentSpeed = Mathf.Clamp(settings.DefaultSpeed, 10f, 2000f);
+        speedResolved = true;
+    }
+
+    private float ScrollSpeedForCurrentChart()
+    {
+        var settings = SettingsManager.Instance;
+        if (settings != null && !settings.DensityScaledScroll) return currentSpeed;
+        var game = GameManager.Instance;
+        if (game == null) return currentSpeed;
+        return ChartScrollSpeed.Resolve(game.CurrentChart, currentSpeed);
+    }
+
+    /// <summary>
+    /// 把算好的流速推給兩個 spawner。
+    /// </summary>
+    /// <remarks>
+    /// **譜還沒載好就不推。** 比例是從 <c>CurrentChart</c> 算的，而這個函式有兩個
+    /// 會在載譜之前跑的呼叫者：Start() 和 <c>SettingsManager.ApplySettings</c>。那時
+    /// <c>CurrentChart</c> 不是 null（→ 比例 1，推原始設定值）就是**上一首的譜**
+    /// （→ 推上一首的比例），等 GameManager 載完再推一次正確的。
+    ///
+    /// 而音符的 Z 是**每幀拿當下的 speed 重算**的
+    /// （<c>targetZ = judgmentZ + timeToStart / 1000 * speed</c>），所以中途換值會讓整片
+    /// 音符瞬間位移，再被平滑函式拉回來 —— 這就是「流速不穩定」的真正原因。
+    /// 跳過這些早期的推送不會漏掉任何事：GameManager 在 <c>NoteSpawner.Initialize</c>
+    /// 之後马上就會呼叫一次，而那之前根本沒有音符在落。
+    /// </remarks>
     private void UpdateSpeedDependencies()
     {
-        if (GameManager.Instance != null)
+        ResolvePlayerSpeed();
+        if (GameManager.Instance != null && GameManager.Instance.CurrentChart != null)
         {
+            float applied = ScrollSpeedForCurrentChart();
             // Only write to spawners when the value actually changed to avoid triggering
             // potential expensive recomputation inside their setters or related listeners.
             const float eps = 0.0001f;
             if (GameManager.Instance.NoteSpawner != null)
             {
-                if (Mathf.Abs(GameManager.Instance.NoteSpawner.speed - currentSpeed) > eps)
+                if (Mathf.Abs(GameManager.Instance.NoteSpawner.speed - applied) > eps)
                 {
-                    GameManager.Instance.NoteSpawner.speed = currentSpeed;
+                    GameManager.Instance.NoteSpawner.speed = applied;
                 }
             }
             if (GameManager.Instance.BeatLineSpawner != null)
@@ -107,15 +159,15 @@ public class UIManager : MonoBehaviour
                 try
                 {
                     float currentBeatSpeed = GameManager.Instance.BeatLineSpawner.Speed;
-                    if (Mathf.Abs(currentBeatSpeed - currentSpeed) > eps)
+                    if (Mathf.Abs(currentBeatSpeed - applied) > eps)
                     {
-                        GameManager.Instance.BeatLineSpawner.Speed = currentSpeed;
+                        GameManager.Instance.BeatLineSpawner.Speed = applied;
                     }
                 }
                 catch
                 {
                     // In case BeatLineSpawner.Speed getter/setter misbehaves, fallback to set directly
-                    GameManager.Instance.BeatLineSpawner.Speed = currentSpeed;
+                    GameManager.Instance.BeatLineSpawner.Speed = applied;
                 }
             }
             // 拋物線模式的生成距離是**絕對長度**，換算成秒數要用新的速度。
@@ -205,6 +257,7 @@ public class UIManager : MonoBehaviour
     public void SetDefaultSpeed(float speed)
     {
         currentSpeed = Mathf.Clamp(speed, 10f, 2000f);
+        speedResolved = true;
         UpdateSpeedUI();
         ApplyCurrentSpeedToSpawners();
     }

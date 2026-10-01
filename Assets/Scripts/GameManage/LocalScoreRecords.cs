@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using UnityEngine;
@@ -9,6 +9,14 @@ public sealed class LocalScoreEntry
     public int score;
     public string rank;
     public long achievedAtUtcTicks;
+
+    /// <summary>這一局有沒有全連（沒有 Miss、沒有 Fail）。</summary>
+    /// <remarks>
+    /// 後加的欄位。`JsonUtility` 讀舊檔時找不到它就是 `false`，也就是「以前打的都
+    /// 不算全連」—— 那是唯一誠實的預設值，因為當時根本沒有記。檔案版本不必跟著
+    /// 升：多一個欄位對舊版讀取器也是無害的（它會忽略）。
+    /// </remarks>
+    public bool fullCombo;
 }
 
 [Serializable]
@@ -60,6 +68,37 @@ public static class LocalScoreRecords
         return chart != null ? chart.scores : EmptyScores;
     }
 
+    /// <summary>這張譜最好的那一筆，沒打過就是 null。</summary>
+    /// <remarks>
+    /// 清單要同時顯示名次勳章和全連記號，而這兩件事在同一筆紀錄裡 —— 分開取會在
+    /// 「最高分那局沒全連、但另一局全連了」的時候給出互相矛盾的兩個圖示。
+    ///
+    /// **全連是看所有紀錄，不是只看最高分那筆。** 全連是一件做到過就算的事，而分數
+    /// 是比大小的；把兩者綁在同一筆會讓玩家在刷分之後失去已經拿到的記號。
+    /// </remarks>
+    public static LocalScoreEntry GetBest(SongSelectionManager.SongOption option)
+    {
+        IReadOnlyList<LocalScoreEntry> scores = GetTopScores(option);
+        if (scores == null || scores.Count == 0) return null;
+        LocalScoreEntry best = scores[0];
+        for (int i = 0; i < scores.Count; i++)
+        {
+            if (scores[i] == null) continue;
+            if (scores[i].score > best.score) best = scores[i];
+        }
+        return best;
+    }
+
+    /// <summary>這張譜**曾經**全連過嗎。</summary>
+    public static bool EverFullCombo(SongSelectionManager.SongOption option)
+    {
+        IReadOnlyList<LocalScoreEntry> scores = GetTopScores(option);
+        if (scores == null) return false;
+        for (int i = 0; i < scores.Count; i++)
+            if (scores[i] != null && scores[i].fullCombo) return true;
+        return false;
+    }
+
     public static int GetBestScore(SongSelectionManager.SongOption option)
     {
         IReadOnlyList<LocalScoreEntry> scores = GetTopScores(option);
@@ -68,7 +107,7 @@ public static class LocalScoreRecords
 
     /// <returns>1-based local placement, or 0 when the score missed the top three.</returns>
     public static int RecordManualScore(
-        SongSelectionManager.SongOption option, int score)
+        SongSelectionManager.SongOption option, int score, bool fullCombo = false)
     {
         string key = GetKey(option);
         if (string.IsNullOrEmpty(key)) return 0;
@@ -84,7 +123,8 @@ public static class LocalScoreRecords
         {
             score = Mathf.Clamp(score, 0, 1000000),
             rank = GetRank(score),
-            achievedAtUtcTicks = DateTime.UtcNow.Ticks
+            achievedAtUtcTicks = DateTime.UtcNow.Ticks,
+            fullCombo = fullCombo
         };
         chart.scores.Add(added);
         chart.scores.Sort((a, b) =>
@@ -137,10 +177,21 @@ public static class LocalScoreRecords
         return null;
     }
 
+    /// <summary>換人了：丟掉快取，下一次讀就會讀到新那位的檔案。</summary>
+    /// <remarks>
+    /// 靜態快取跨換人是這一整套最容易出的錯 —— 沒有丟的話，換過去的人會看到前一位的
+    /// 成績，而且**下一次存檔會把它寫進新的人的檔案裡**，兩邊都毀掉。所以是 slot 一
+    /// 變就丟，不是等誰記得呼叫。
+    /// </remarks>
+    private static void Forget() => data = null;
+
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
+    private static void HookSlotChanges() => PlayerSlots.Changed += Forget;
+
     private static void EnsureLoaded()
     {
         if (data != null) return;
-        string path = Path.Combine(Application.persistentDataPath, FileName);
+        string path = PlayerSlots.PathFor(FileName);
         try
         {
             data = File.Exists(path)
@@ -173,11 +224,12 @@ public static class LocalScoreRecords
 
     private static void Save()
     {
-        string path = Path.Combine(Application.persistentDataPath, FileName);
+        string path = PlayerSlots.PathFor(FileName);
         string temporaryPath = path + ".tmp";
         try
         {
-            Directory.CreateDirectory(Application.persistentDataPath);
+            // 檔案現在在 players/<id>/ 底下，建根目錄已經不夠。
+            Directory.CreateDirectory(Path.GetDirectoryName(path));
             File.WriteAllText(temporaryPath, JsonUtility.ToJson(data, true));
             if (File.Exists(path)) File.Delete(path);
             File.Move(temporaryPath, path);

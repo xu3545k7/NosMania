@@ -17,6 +17,20 @@ public sealed class GameplayEntryPresentation : MonoBehaviour
     private Vector2 lastPointer;
     private float cursorVisibleUntil;
 
+    /// <summary>數字跳出來之後收回原寸要花多久。</summary>
+    /// <remarks>
+    /// 原本是每幀朝 1 做 Lerp：幀率越高收得越快，而且它在數學上永遠到不了 1，
+    /// 講不出一個長度來。改成和 <see cref="Flash"/> 同一套 —— 記下跳出來的那
+    /// 一刻，用經過的時間算進度，時間到就停在原寸。
+    ///
+    /// 140 毫秒：短到還讀得出是「彈出來」而不是「脹大」，長到在 60 幀下仍有
+    /// 八、九幀可看，不會只剩一格突兀的縮放。
+    /// </remarks>
+    private const float PopSeconds = 0.14f;
+
+    /// <summary>跳出來的那一瞬間放到幾倍。</summary>
+    private const float PopScale = 1.18f;
+
     private static GameplayEntryPresentation EnsureCreated()
     {
         if (instance != null) return instance;
@@ -107,6 +121,9 @@ public sealed class GameplayEntryPresentation : MonoBehaviour
     {
         float end = Time.unscaledTime + seconds;
         int previous = -1;
+        // 目前這個數字是什麼時候跳出來的。換數字就重新計時：彈出一定是從
+        // PopScale 起跳的一段，不是反向的補間，所以不必接著現在的大小跑。
+        float poppedAt = Time.unscaledTime;
         countGroup.alpha = 1f;
         while (Time.unscaledTime < end)
         {
@@ -116,10 +133,22 @@ public sealed class GameplayEntryPresentation : MonoBehaviour
             {
                 previous = value;
                 countLabel.text = value.ToString();
-                countLabel.rectTransform.localScale = Vector3.one * 1.18f;
+                poppedAt = Time.unscaledTime;
             }
-            countLabel.rectTransform.localScale = Vector3.Lerp(
-                countLabel.rectTransform.localScale, Vector3.one, 10f * Time.unscaledDeltaTime);
+
+            float pop = (Time.unscaledTime - poppedAt) / PopSeconds;
+            if (pop < 1f)
+            {
+                // 快起慢收：一出來就幾乎到位，剩下的路慢慢收 —— 這樣讀成被彈
+                // 出來，等速收回則讀成有人把它拉小。
+                float ease = 1f - Mathf.Pow(1f - pop, 3f);
+                countLabel.rectTransform.localScale = Vector3.one * Mathf.Lerp(PopScale, 1f, ease);
+            }
+            else
+            {
+                // 明確的終點。停在這裡之後這一格就不再每幀動它。
+                countLabel.rectTransform.localScale = Vector3.one;
+            }
             // 數字之間不再淡出。原本每一秒都會淡到近乎透明再跳回來，「1」那一格
             // 尤其糟：最需要看清楚的一下反而最淡。
             countGroup.alpha = 1f;

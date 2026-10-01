@@ -984,6 +984,13 @@ public class NoteJudgementMeshManager : MonoBehaviour
                     var rend = noteRendererOverride;
                     if (rend == null)
                     {
+                        // 音符**頭**，不是「子物件裡第一個找到的 renderer」。滑奏的音符
+                        // 底下掛著連結段，它斜拉到下一鍵、bounds 中心在兩鍵中間，抓到
+                        // 它的話特效會偏掉半個鍵道。
+                        try { rend = note.HeadRenderer; } catch { }
+                    }
+                    if (rend == null)
+                    {
                         try { rend = note.GetComponentInChildren<Renderer>(); } catch { }
                     }
                     if (rend != null) x = rend.bounds.center.x;

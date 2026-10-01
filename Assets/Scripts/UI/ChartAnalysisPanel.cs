@@ -56,9 +56,10 @@ public sealed class ChartAnalysisPanel
         root.sizeDelta = new Vector2(PanelWidth, PanelHeight);
 
         var background = root.gameObject.AddComponent<Image>();
-        background.sprite = ClassicalBookUITheme.GetPaperTextureSprite();
-        background.type = Image.Type.Tiled;
-        background.color = new Color(0.12f, 0.055f, 0.032f, 0.985f);
+        // gain 4：tint 0.12 會把紙的 0.0214 標準差壓成 8-bit 上的 0.74 級，整塊面板
+        // 跨不到一個色階。放大之後是 4.35 級，而平均亮度不變。
+        ClassicalBookUITheme.ApplyDarkSurface(background,
+            new Color(0.12f, 0.055f, 0.032f, 0.985f), ClassicalBookUITheme.Surface.Paper, 4.5f);
         background.raycastTarget = false;
         var outline = root.gameObject.AddComponent<Outline>();
         outline.effectColor = new Color(ClassicalBookUITheme.Gold.r, ClassicalBookUITheme.Gold.g,

@@ -1,6 +1,7 @@
 ﻿using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.UI;
 
 /// <summary>
@@ -32,7 +33,14 @@ public sealed class SongDifficultyStrip : MonoBehaviour
     /// <summary>分數靠右對齊到這裡，等第圖標接在後面。</summary>
     private const float ScoreEdge = 196f;
     /// <summary>How far the plaque's slanted ends cut in, as a fraction of its height.</summary>
-    private const float Bevel = 0.30f;
+    /// <summary>端頭留白。原本是 `height * Bevel * 2`，斜切沒了但寬度必須一模一樣。</summary>
+    /// <remarks>
+    /// 761.2 這個數字是算式的錨：`SideStripEdge`（476.5）和 `SideStripBottom`
+    /// （461.2）是它的函數，而演奏會那兩塊牌的寬度又是從 `SideStripEdge` 推出來的。
+    /// 把盤子縮到 628 每少一單位半寬，兩塊牌就少 0.85 單位 —— 所以這裡保留 133.2，
+    /// 只是把它從「斜切吃掉的」改成「端頭留的呼吸」。
+    /// </remarks>
+    private const float EndRoom = 133.2f;
 
     /// <summary>
     /// The named charts a song can carry, in the order they are shown -- which
@@ -46,6 +54,7 @@ public sealed class SongDifficultyStrip : MonoBehaviour
         public TextMeshProUGUI level;
         public RectTransform root;
         public Button button;
+        public GemGlow glow;
     }
 
     private readonly List<Slot> slots = new List<Slot>(TierCount);
@@ -92,7 +101,7 @@ public sealed class SongDifficultyStrip : MonoBehaviour
 
         float content = TierCount * GemWidth + (TierCount - 1) * Spacing;
         float height = GemHeight + RankSize + RecordHeight + 34f;
-        float width = content + height * Bevel * 2f + 44f;
+        float width = content + EndRoom + 44f;
 
         var stripObject = new GameObject(ObjectName, typeof(RectTransform), typeof(CanvasRenderer),
             typeof(PlaqueGraphic), typeof(SongDifficultyStrip));
@@ -106,9 +115,8 @@ public sealed class SongDifficultyStrip : MonoBehaviour
         rect.anchoredPosition = new Vector2(0f, -20f);
         rect.sizeDelta = new Vector2(width, height);
 
-        PlaqueGraphic plaque = stripObject.GetComponent<PlaqueGraphic>();
-        plaque.raycastTarget = false;
-        plaque.Bevel = Bevel;
+        // 兩層：場（有紙紋、有光）＋ 金工（沒有貼圖）。見 PlaqueGraphic.Build。
+        PlaqueGraphic plaque = PlaqueGraphic.Build(rect, PlaqueShape.Cradle);
 
         SongDifficultyStrip strip = stripObject.GetComponent<SongDifficultyStrip>();
         strip.row = rect;
@@ -126,7 +134,11 @@ public sealed class SongDifficultyStrip : MonoBehaviour
                 RecordHeight + 38f);
             slot.gem.Caption = TierName((Tier)i);
             Tier tier = (Tier)i;
-            slot.button.onClick.AddListener(() => Select(tier));
+            slot.button.onClick.AddListener(() =>
+            {
+                UiSfx.Select();
+                Select(tier);
+            });
             slots.Add(slot);
         }
 
@@ -454,12 +466,15 @@ public sealed class SongDifficultyStrip : MonoBehaviour
         // 沒有的難度不是留白：留白讀起來像「還沒載入」，問號讀起來是「這首沒有」。
         slot.gem.Tint = present ? TierColour(tier) : new Color(0.42f, 0.40f, 0.42f, 1f);
         slot.gem.Muted = !present;
-        slot.gem.Selected = present && selected;
         slot.level.text = present ? chart.difficultyLevel.ToString() : "?";
-        // 沒被選到的也要壓暗，否則「現在看的是哪一格」得靠寶石自己的亮度去猜。
-        float ink = present ? (selected ? 1f : 0.5f) : 0.5f;
-        slot.level.color = new Color(1f, 1f, 1f, ink);
+        // 等級數字不跟著石身壓暗。TMP 把 faceColor 乘上頂點色，所以調低這裡的 alpha
+        // 會連那圈灰描邊一起淡掉 —— 而描邊正是數字壓在寶石亮面上還讀得到的唯一原因。
+        // 「現在看的是哪一格」石身自己的亮度已經講完了，數字不必再說一次。
+        // 問號是例外：它不是一個等級，用同一個「沒選到」的量收起來，才不會搶戲。
+        slot.level.color = new Color(1f, 1f, 1f, present ? 1f : GemGraphic.UnselectedAlpha);
         if (slot.button != null) slot.button.interactable = present;
+        // 選中／滑過的亮度交給 GemGlow 補間。資料在這一行就已經是對的了，動的只有畫面。
+        if (slot.glow != null) slot.glow.Set(present, selected);
     }
 
     private Slot CreateSlot()
@@ -484,7 +499,11 @@ public sealed class SongDifficultyStrip : MonoBehaviour
         // 寶石自己就是按鈕。牌面底板不吃射線，所以點擊只會落在石頭上。
         gem.raycastTarget = true;
         Button button = gemObject.AddComponent<Button>();
+        // transition 維持 None：Selectable 的過場是去寫 targetGraphic.color，而寶石
+        // 的每一面都是自己在 OnPopulateMesh 裡算出來的，color 對它沒有意義。手感由
+        // GemGlow 出。
         button.transition = Selectable.Transition.None;
+        GemGlow glow = gemObject.AddComponent<GemGlow>();
 
         // 白字、灰色細框，壓在寶石中央。細框是必要的：寶石有亮有暗，純白數字
         // 在亮面上會消失。
@@ -506,76 +525,356 @@ public sealed class SongDifficultyStrip : MonoBehaviour
         level.outlineWidth = 0.16f;
         level.raycastTarget = false;
 
-        return new Slot { root = root, gem = gem, level = level, button = button };
+        return new Slot { root = root, gem = gem, level = level, button = button, glow = glow };
     }
 }
 
 /// <summary>
-/// The hexagonal plate the stones sit on: a dark field with a plain gold border.
+/// 這四塊面板的底：一套共用的金屬，四種不同的家具。
 /// </summary>
 /// <remarks>
-/// A border and not ornament. The plaque already carries five coloured stones,
-/// five captions, five grades and a score; scrollwork around that is one more
-/// thing competing for the same glance. Two clean rules say "this is a panel"
-/// and then get out of the way.
+/// **為什麼不再是同一個六角形。** 同一個平頂六角形本來同時當玩家徽章、演奏會左右
+/// 兩塊牌、以及五顆寶石底下這塊盤子；而遊戲裡音符、力度光暈、踏板和弦光、中央水晶
+/// 也全是六角形。使用者的話是「不要都六角形」—— 這不是配色問題，是整套形狀語彙塌
+/// 到同一個字上了。
+///
+/// **共用的是物理，不是家具。** 四種輪廓共用：同一個金色、同一組三層填色、同一條
+/// 14→15.6 的內金線、同一圈 1 單位的羽化裙擺（專案沒開 MSAA，硬邊會爬階梯）。不同
+/// 的只有那一圈點。所以它們看得出是同一種金屬打的，又絕不會認錯是哪一塊。
+///
+/// **為什麼六角形在版面上也該走。** 演奏會那塊牌的 `Pad` 被迫從 26 加到 38，病根不
+/// 是內縮的算法（真正的多邊形 offset 只賺回 2.5 單位），是那條**跑滿全高的斜邊**：
+/// 在最上和最下那一行字的高度上，內縮 14 的那圈金線已經沿著斜邊退到 x≈35。方角或
+/// 是只在一端做文章的輪廓完全不花這筆錢，四條直邊上的金線恆在 15.6。
 /// </remarks>
+internal enum PlaqueShape
+{
+    /// <summary>銅牌：左端整個是半圓，右端方 —— 圓頭方尾。玩家徽章。</summary>
+    Badge,
+    /// <summary>灣口牌：外端是半橢圓的鼻子，裝訂端方。演奏會左（演奏者）。</summary>
+    Bay,
+    /// <summary>印刷卡：四角方切，只在角上斜掉 4 —— 裁刀沒有半徑。演奏會右（評分）。</summary>
+    Card,
+    /// <summary>搖籃：平頂讓寶石，性格全在分數帶以下那道相切的四分之一橢圓。難度列。</summary>
+    Cradle
+}
+
 [RequireComponent(typeof(CanvasRenderer))]
 internal sealed class PlaqueGraphic : MaskableGraphic
 {
-    [SerializeField] private Color field = new Color(0.10f, 0.055f, 0.035f, 0.93f);
+    internal const float RuleOuter = 14f;     // 內金線：外緣
+    internal const float RuleInner = 15.6f;   // 內金線：內緣
+    private const float Nick = 4f;            // 印刷卡的角，45°
+
+    /// <summary>光從左上來。和這個專案其他每一處的受光方向同一邊（約 123°）。</summary>
+    internal static readonly Vector2 Key = new Vector2(-0.55f, 0.84f).normalized;
+
+    /// <summary>對角漸層的總對比。0.13 表示左上 ×1.18、右下 ×0.82。</summary>
+    private const float Throw = 0.13f;
+
+    /// <summary>場鋪的是哪一種材質，放大幾倍。tint 0.10 下給到 8-bit 上約 4.2 級。</summary>
+    /// <remarks>
+    /// 皮不是紙。紙要 gain 5 才夠（它的標準差只有 0.0215），而那個倍率會把抄紙的簾紋
+    /// 放大成一條條看得見的**橫帶** —— 牌面因此有了方向，而一塊平放的托盤不該有。皮
+    /// 的標準差是 0.0443、而且是各向同性的（鵝卵石般的粒面，不是線），gain 2.5 就到
+    /// 同樣的對比。順帶讓這幾塊牌和結算那本書是同一種材料。
+    /// </remarks>
+    private const ClassicalBookUITheme.Surface GrainKind = ClassicalBookUITheme.Surface.Leather;
+    private const float GrainGain = 2.5f;
+
+    /// <summary>牌面的底色。</summary>
+    /// <remarks>
+    /// **0.17 不是 0.10。** 0.10 的牌子在一整片亮著的書和舞台燈旁邊讀起來是挖在畫面
+    /// 上的**洞**，不是放在上面的物件；而且那個亮度下不管貼圖怎麼放大，絕對調變都只
+    /// 有 ±5 級，在感知門檻以下 —— 使用者連續兩次說「沒看到質感」就是這件事。提到
+    /// 0.17 之後同樣的相對調變變成 ±9.4 級，皮紋才真的看得見。色相不動（G/R = 0.55、
+    /// B/R = 0.35）。
+    ///
+    /// 上限在哪：最亮的一角是 `0.17 × 1.818（flat lift）× 1.13（光）× 0.891（貼圖最
+    /// 大值）= 0.31`，離夾白還很遠。
+    /// </remarks>
+    [SerializeField] private Color field = new Color(0.17f, 0.0935f, 0.0595f, 0.93f);
     [SerializeField] private Color gilt = new Color(0.92f, 0.78f, 0.44f, 1f);
+    [SerializeField] private PlaqueShape profile = PlaqueShape.Card;
+    [SerializeField] private float nose = 75f;      // Bay 的鼻子有多深
+    [SerializeField] private float cradleRx = 200f; // Cradle 底部那道橢圓
+    [SerializeField] private float cradleRy = 64f;
 
-    private float bevel = 0.30f;
+    private PlaqueGildingGraphic gilding;
 
-    public float Bevel
+
+    /// <summary>
+    /// 在 <paramref name="host"/> 上建一塊牌：場一層、金工一層。
+    /// </summary>
+    /// <remarks>
+    /// **為什麼一定要兩層。** 貼圖會乘到整個 mesh 上，而金色 0.92 乘上均值 0.55 的紙
+    /// 紋是 0.51 —— 金子會發黑。場要貼圖、金工不能有，所以它們不能是同一個 graphic。
+    /// 代價是多一個 draw call，換來的是那 16.9 萬個像素不再是平塗。
+    /// </remarks>
+    public static PlaqueGraphic Build(RectTransform host, PlaqueShape shape)
     {
-        get => bevel;
-        set
+        if (host == null) return null;
+        PlaqueGraphic plate = host.GetComponent<PlaqueGraphic>();
+        if (plate == null) plate = host.gameObject.AddComponent<PlaqueGraphic>();
+        plate.profile = shape;
+        plate.raycastTarget = false;
+
+        Transform existing = host.Find("~Gilding");
+        if (existing == null)
         {
-            if (Mathf.Approximately(bevel, value)) return;
-            bevel = value;
-            SetVerticesDirty();
+            var giltObject = new GameObject("~Gilding", typeof(RectTransform),
+                typeof(CanvasRenderer), typeof(PlaqueGildingGraphic));
+            giltObject.layer = host.gameObject.layer;
+            var giltRect = (RectTransform)giltObject.transform;
+            giltRect.SetParent(host, false);
+            giltRect.anchorMin = Vector2.zero;
+            giltRect.anchorMax = Vector2.one;
+            giltRect.offsetMin = Vector2.zero;
+            giltRect.offsetMax = Vector2.zero;
+            existing = giltObject.transform;
+        }
+        plate.gilding = existing.GetComponent<PlaqueGildingGraphic>();
+        plate.gilding.raycastTarget = false;
+        plate.gilding.Bind(plate);
+        plate.SetVerticesDirty();
+        return plate;
+    }
+
+    public override Texture mainTexture
+    {
+        get
+        {
+            Texture grain = ClassicalBookUITheme.DarkSurfaceTexture(GrainKind, GrainGain);
+            return grain != null ? grain : base.mainTexture;
         }
     }
 
+    public PlaqueShape Profile
+    {
+        get => profile;
+        set
+        {
+            if (profile == value) return;
+            profile = value;
+            SetVerticesDirty();
+            if (gilding != null) gilding.SetVerticesDirty();
+        }
+    }
+
+    /// <summary><see cref="PlaqueShape.Bay"/> 的鼻子深度。要等於肖像的中心 x 才同心。</summary>
+    public float Nose
+    {
+        get => nose;
+        set
+        {
+            if (Mathf.Approximately(nose, value)) return;
+            nose = value;
+            SetVerticesDirty();
+            if (gilding != null) gilding.SetVerticesDirty();
+        }
+    }
+
+    internal Color Gilt => gilt;
+
+    /// <summary>
+    /// 要掛投影的話掛在這裡，不要掛在場上。
+    /// </summary>
+    /// <remarks>
+    /// uGUI 的 `Shadow` 複製的是**它所在那個 graphic 的網格**。掛在場上的話，複製到的
+    /// 是內縮 5 的那一圈，投影會整個躲在牌子自己底下 —— 只有金工那一層畫到真正的外
+    /// 輪廓。
+    /// </remarks>
+    internal GameObject OutlineTarget => gilding != null ? gilding.gameObject : gameObject;
+
+    /// <summary>金工那一層要用同一條環，所以環的產生器對它開放。</summary>
+    internal Vector2[] RingFor(Rect r, float inset) => Ring(r, inset);
+
+    /// <summary>
+    /// 場。兩層暗色的填，鋪著放大過的紙紋，再壓一道從左上來的對角漸層。
+    /// </summary>
+    /// <remarks>
+    /// **為什麼要做這件事。** 難度盤是 761×222 —— 16.9 萬個像素，過去是一片**平塗**，
+    /// 而上面坐著五顆有明暗刻面的石頭。牌面本身沒有任何材質可言，所以不管周圍的東西
+    /// 做得多細，這一塊永遠是畫面上最假的地方。
+    ///
+    /// 紙紋走 `ClassicalBookUITheme` 那條放大路徑：tint 0.10 會把紙的 0.0215 標準差壓
+    /// 成 8-bit 上的 0.55 級（跨不到一個色階），gain 5 之後是 4.3 級。頂點色要乘上
+    /// `DarkSurfaceLift`，平均亮度才和放大之前一樣。
+    ///
+    /// 對角漸層是逐頂點的，而扇形是從中心發散的 —— 中心那一點拿 1.0、外環每一點拿自
+    /// 己的值，插值出來就是一整片連續的漸層，零額外頂點。
+    /// </remarks>
     protected override void OnPopulateMesh(VertexHelper vh)
     {
         vh.Clear();
         Rect r = rectTransform.rect;
         if (r.width <= 8f || r.height <= 8f) return;
 
-        Vector2[] outer = Hexagon(r, 0f);
-        Vector2[] inner = Hexagon(r, 5f);
-        Vector2[] core = Hexagon(r, 9f);
+        // 這塊牌**本來是純色**，不是鋪著貼圖的面 —— 所以補的是 1/pivot 不是
+        // 均值/pivot。用錯的話整塊會暗 19%，而牌面上還坐著要讀的字。
+        float lift = ClassicalBookUITheme.DarkSurfaceFlatLift;
+        Texture grain = mainTexture;
+        float tile = grain != null ? grain.width : 256f;
 
-        Fan(vh, r.center, outer, new Color(gilt.r, gilt.g, gilt.b, 0.95f));
-        Fan(vh, r.center, inner, new Color(field.r * 0.6f, field.g * 0.6f, field.b * 0.6f, 0.98f));
-        Fan(vh, r.center, core, field);
-
-        // 內側再一條細金線。兩條規線之間留一段暗場，邊框才有厚度。
-        Vector2[] ruleOuter = Hexagon(r, 14f);
-        Vector2[] ruleInner = Hexagon(r, 15.6f);
-        for (int i = 0; i < ruleOuter.Length; i++)
-            AddQuad(vh, ruleOuter[i], ruleOuter[(i + 1) % ruleOuter.Length],
-                ruleInner[(i + 1) % ruleInner.Length], ruleInner[i],
-                new Color(gilt.r, gilt.g, gilt.b, 0.55f));
+        Color recess = new Color(field.r * 0.6f, field.g * 0.6f, field.b * 0.6f, 0.98f);
+        LitFan(vh, r, Ring(r, 5f), recess, lift, tile);
+        LitFan(vh, r, Ring(r, 9f), field, lift, tile);
     }
 
-    /// <summary>A flat-top hexagon inset from the rect by <paramref name="inset"/>.</summary>
-    private Vector2[] Hexagon(Rect r, float inset)
+    private static void LitFan(VertexHelper vh, Rect r, Vector2[] points, Color colour,
+        float lift, float tile)
     {
-        float halfWidth = r.width * 0.5f - inset;
-        float halfHeight = r.height * 0.5f - inset;
-        float cut = Mathf.Min(halfWidth * 0.9f, r.height * bevel);
+        Color based = new Color(colour.r * lift, colour.g * lift, colour.b * lift, colour.a);
+        int first = vh.currentVertCount;
+        AddLit(vh, r, r.center, based, tile);
+        foreach (Vector2 point in points) AddLit(vh, r, point, based, tile);
+        for (int i = 0; i < points.Length; i++)
+            vh.AddTriangle(first, first + 1 + i, first + 1 + (i + 1) % points.Length);
+    }
+
+    private static void AddLit(VertexHelper vh, Rect r, Vector2 position, Color colour, float tile)
+    {
+        float nx = r.width > 1f ? (position.x - r.center.x) / (r.width * 0.5f) : 0f;
+        float ny = r.height > 1f ? (position.y - r.center.y) / (r.height * 0.5f) : 0f;
+        float lit = 1f + Throw * (Key.x * nx + Key.y * ny);
+        UIVertex vertex = UIVertex.simpleVert;
+        vertex.position = position;
+        vertex.color = new Color(colour.r * lit, colour.g * lit, colour.b * lit, colour.a);
+        vertex.uv0 = new Vector2((position.x - r.xMin) / tile, (position.y - r.yMin) / tile);
+        vh.AddVert(vertex);
+    }
+
+    // ── 四種輪廓 ──────────────────────────────────────────────────────
+
+    private Vector2[] Ring(Rect r, float inset)
+    {
+        switch (profile)
+        {
+            case PlaqueShape.Badge: return BadgeRing(r, inset);
+            case PlaqueShape.Card: return CardRing(r, inset);
+            // 這兩種的造型只在一端（或只在一條邊）上，四條直邊維持筆直，所以真正的
+            // 多邊形 offset 在每一條邊上量到的垂直距離都剛好是 inset —— 金線恆在
+            // 15.6，不會像斜邊那樣沿著邊往內退。那正是六角形做不到的事。
+            default: return Silhouette.Offset(Ring0(r), r.center, -inset);
+        }
+    }
+
+    private Vector2[] Ring0(Rect r)
+    {
+        return profile == PlaqueShape.Bay ? BayRing(r) : CradleRing(r);
+    }
+
+    /// <summary>圓頭方尾。頭的半徑隨內縮變小但**圓心不動**，所以每一層的相切都還在。</summary>
+    /// <remarks>
+    /// 圓心固定是關鍵：若把整個輪廓等比內縮，頭和三條直邊在接點會錯開一格，每一層
+    /// 之間就會露出一條細縫（這個檔案的六角形因為 `cut` 用的是全高而不是內縮後的半
+    /// 高，已經有這個毛病的輕症版）。
+    /// </remarks>
+    private static Vector2[] BadgeRing(Rect r, float inset)
+    {
+        float radius = r.height * 0.5f - inset;
+        float hx = r.xMin + r.height * 0.5f + 1f;      // 430×116 上是 59，和肖像同心
+        float cy = r.center.y;
+        float top = r.yMax - inset;
+        float bottom = r.yMin + inset;
+        float right = r.xMax - inset;
+
+        var points = new Vector2[17];
+        points[0] = new Vector2(hx, top);
+        points[1] = new Vector2(right, top);
+        points[2] = new Vector2(right, bottom);
+        points[3] = new Vector2(hx, bottom);
+        for (int i = 1; i < 14; i++)
+        {
+            float angle = Mathf.Deg2Rad * (-90f - 180f * i / 14f);
+            points[3 + i] = new Vector2(hx + radius * Mathf.Cos(angle), cy + radius * Mathf.Sin(angle));
+        }
+        return points;
+    }
+
+    /// <summary>外端半橢圓的鼻子，裝訂端方切。</summary>
+    private Vector2[] BayRing(Rect r)
+    {
+        float bx = Mathf.Clamp(nose, 8f, r.width * 0.45f);
+        float rx = bx;
+        float ry = r.height * 0.5f;
+        float cx = r.xMin + bx;
+        float cy = r.center.y;
+
+        var points = new System.Collections.Generic.List<Vector2>(17)
+        {
+            new Vector2(cx, r.yMin), new Vector2(r.xMax, r.yMin),
+            new Vector2(r.xMax, r.yMax), new Vector2(cx, r.yMax)
+        };
+        // 90° → 270°：從上緣繞過最左邊回到下緣。兩端的點和上面那兩個重合，所以跳過。
+        for (int i = 1; i < 14; i++)
+        {
+            float angle = Mathf.Deg2Rad * (90f + 180f * i / 14f);
+            points.Add(new Vector2(cx + rx * Mathf.Cos(angle), cy + ry * Mathf.Sin(angle)));
+        }
+        return points.ToArray();
+    }
+
+    /// <summary>方切，四角各斜掉 4。裁刀沒有半徑，這就是整句設計。</summary>
+    private static Vector2[] CardRing(Rect r, float inset)
+    {
+        float x0 = r.xMin + inset, x1 = r.xMax - inset;
+        float y0 = r.yMin + inset, y1 = r.yMax - inset;
+        float n = Mathf.Min(Nick, Mathf.Min(x1 - x0, y1 - y0) * 0.25f);
         return new[]
         {
-            new Vector2(r.center.x - halfWidth, r.center.y),
-            new Vector2(r.center.x - halfWidth + cut, r.center.y + halfHeight),
-            new Vector2(r.center.x + halfWidth - cut, r.center.y + halfHeight),
-            new Vector2(r.center.x + halfWidth, r.center.y),
-            new Vector2(r.center.x + halfWidth - cut, r.center.y - halfHeight),
-            new Vector2(r.center.x - halfWidth + cut, r.center.y - halfHeight),
+            new Vector2(x0 + n, y1), new Vector2(x1 - n, y1),
+            new Vector2(x1, y1 - n), new Vector2(x1, y0 + n),
+            new Vector2(x1 - n, y0), new Vector2(x0 + n, y0),
+            new Vector2(x0, y0 + n), new Vector2(x0, y1 - n)
         };
+    }
+
+    /// <summary>平頂讓寶石，底下兩側掃上去的一道相切橢圓。</summary>
+    /// <remarks>
+    /// `cradleRy` 不能再小：這道掃弧的最小曲率半徑是 ry²/rx，在 64/200 是 20.5，還在
+    /// 內金線被侵蝕的那 15.6 之上。降到 56 就是 15.7，金線會開始起尖點。
+    /// </remarks>
+    private Vector2[] CradleRing(Rect r)
+    {
+        float rx = Mathf.Min(cradleRx, r.width * 0.3f);
+        float ry = Mathf.Min(cradleRy, r.height * 0.32f);
+        // 18 不是 10。頂上兩個圓角的半徑必須大於內金線的 15.6 —— `Silhouette.Offset`
+        // 是逐點的斜接，把一段半徑 r 的弧往內推超過 r，相鄰頂點就會交叉，那一圈線在
+        // 兩個角上各折 3 條邊。實測 16 還會折 2 條，18 才乾淨。
+        const float f = 18f;
+        var points = new System.Collections.Generic.List<Vector2>(26);
+        // 左下的掃弧：180° → 270°，從 (xMin, yMin+ry) 到 (xMin+rx, yMin)
+        for (int i = 0; i <= 8; i++)
+        {
+            float angle = Mathf.Deg2Rad * (180f + 90f * i / 8f);
+            points.Add(new Vector2(r.xMin + rx + rx * Mathf.Cos(angle),
+                                   r.yMin + ry + ry * Mathf.Sin(angle)));
+        }
+        // 右下鏡像。從 i=8 起算，那一點是 (xMax-rx, yMin) —— 兩道掃弧之間的底邊必須
+        // 是平的，少了它底緣會從 x=rx 直接斜到 x=W-0.8rx，弧和弧之間出現一道折。
+        for (int i = 8; i >= 0; i--)
+        {
+            float angle = Mathf.Deg2Rad * (180f + 90f * i / 8f);
+            points.Add(new Vector2(r.xMax - rx - rx * Mathf.Cos(angle),
+                                   r.yMin + ry + ry * Mathf.Sin(angle)));
+        }
+        // 上面兩個角只給 10 的圓角：頂緣必須是平的，五顆石頭坐在上面。
+        points.Add(new Vector2(r.xMax, r.yMax - f));
+        for (int i = 1; i < 3; i++)
+        {
+            float angle = Mathf.Deg2Rad * (90f * i / 3f);
+            points.Add(new Vector2(r.xMax - f + f * Mathf.Cos(angle), r.yMax - f + f * Mathf.Sin(angle)));
+        }
+        points.Add(new Vector2(r.xMax - f, r.yMax));
+        points.Add(new Vector2(r.xMin + f, r.yMax));
+        for (int i = 1; i < 3; i++)
+        {
+            float angle = Mathf.Deg2Rad * (90f + 90f * i / 3f);
+            points.Add(new Vector2(r.xMin + f + f * Mathf.Cos(angle), r.yMax - f + f * Mathf.Sin(angle)));
+        }
+        points.Add(new Vector2(r.xMin, r.yMax - f));
+        return points.ToArray();
     }
 
     private static void Fan(VertexHelper vh, Vector2 centre, Vector2[] points, Color colour)
@@ -607,6 +906,197 @@ internal sealed class PlaqueGraphic : MaskableGraphic
     }
 }
 
+
+/// <summary>
+/// 牌子的金工：外緣、羽化的裙擺、內金線。**不能有貼圖。**
+/// </summary>
+/// <remarks>
+/// 它和 <see cref="PlaqueGraphic"/> 是同一塊牌的兩層。拆開的唯一理由是貼圖會乘到整個
+/// mesh 上：金色 0.92 乘上均值 0.55 的紙紋是 0.51，金子會發黑。場需要那張紙紋，金工
+/// 不能碰它，所以它們不能共用一個 `CanvasRenderer`。
+///
+/// 它是子物件所以畫在場之後 —— 內金線必須壓在場上面，而外緣那圈金和場沒有重疊。
+/// </remarks>
+[RequireComponent(typeof(CanvasRenderer))]
+internal sealed class PlaqueGildingGraphic : MaskableGraphic
+{
+    private const float RuleOuter = PlaqueGraphic.RuleOuter;
+    private const float RuleInner = PlaqueGraphic.RuleInner;
+
+    private PlaqueGraphic plate;
+
+    internal void Bind(PlaqueGraphic owner)
+    {
+        plate = owner;
+        SetVerticesDirty();
+    }
+
+    protected override void OnPopulateMesh(VertexHelper vh)
+    {
+        vh.Clear();
+        if (plate == null) plate = GetComponentInParent<PlaqueGraphic>();
+        if (plate == null) return;
+        Rect r = rectTransform.rect;
+        if (r.width <= 8f || r.height <= 8f) return;
+
+        Color gilt = plate.Gilt;
+        Vector2 centre = r.center;
+        Vector2[] rim = plate.RingFor(r, 0f);
+
+        // 外輪廓羽化。專案沒開 MSAA（PC_RPAsset 的 m_MSAA: 1），而輪播每一幀都在改卡
+        // 片的縮放 —— 任何一條不是水平也不是垂直的邊只要是硬邊，就會一路爬階梯。實心
+        // 收進半格、外面補一圈 alpha 收到 0 的裙擺，大小不變，邊卻是連續的。
+        Vector2[] outer = Silhouette.Offset(rim, centre, -0.5f);
+        Vector2[] skirt = Silhouette.Offset(rim, centre, 0.5f);
+        Color edge = new Color(gilt.r, gilt.g, gilt.b, 0.95f);
+
+        // 外緣那一圈金：從實心邊界到場的上緣（內縮 5），是一條帶不是一整片 —— 場已
+        // 經自己畫了，不需要在它底下再鋪一層。
+        //
+        // **每一段都照自己的法線受光。** 這是整塊牌上唯一高對比的東西：場的 tint 是
+        // 0.10，紋理再怎麼放大絕對變化也只有 ±5 級；金是 0.92，同樣的相對調變是
+        // ±38 級。一整圈同色的金讀起來是印上去的色塊，有方向的金才讀成打過的金屬。
+        //
+        // 法線直接從已經算好的兩圈拿：`skirt − outer` 就是那個頂點的向外方向。
+        var shade = new float[outer.Length];
+        for (int i = 0; i < outer.Length; i++)
+        {
+            Vector2 n = skirt[i] - outer[i];
+            n = n.sqrMagnitude > 1e-6f ? n.normalized : Vector2.up;
+            // 0.68–1.06 不是 0.72–1.20：金是 0.92，乘上 1.20 是 1.10，最亮的那一段會被
+            // 夾成純白 —— 高光反而變成一塊沒有形狀的平面。1.06 讓它停在 0.975。
+            shade[i] = 0.68f + 0.38f * Mathf.Clamp01(Vector2.Dot(n, PlaqueGraphic.Key) * 0.5f + 0.5f);
+        }
+        Vector2[] inner5 = plate.RingFor(r, 5f);
+        for (int i = 0; i < outer.Length; i++)
+        {
+            int next = (i + 1) % outer.Length;
+            Color a = Tone(edge, shade[i]);
+            Color b = Tone(edge, shade[next]);
+            // 內緣比外緣暗一階：金帶是一個有厚度的斜面，不是一條線。
+            AddQuad(vh, outer[i], outer[next], inner5[next], inner5[i],
+                a, b, Tone(edge, shade[next] * 0.82f), Tone(edge, shade[i] * 0.82f));
+            Color clearA = new Color(a.r, a.g, a.b, 0f);
+            Color clearB = new Color(b.r, b.g, b.b, 0f);
+            AddQuad(vh, outer[i], outer[next], skirt[next], skirt[i], a, b, clearB, clearA);
+        }
+
+        Hairline(vh, r, centre, rim, gilt);
+    }
+
+    // ── 內金線 ────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// 兩條規線之間留一段暗場，邊框才有厚度。
+    /// </summary>
+    /// <remarks>
+    /// 只有 <see cref="PlaqueShape.Bay"/> 和 <see cref="PlaqueShape.Cradle"/> 的金線
+    /// 是輪廓的真正 offset —— 它們的直邊夠多，offset 在每一條邊上都剛好是 15.6。
+    ///
+    /// <see cref="PlaqueShape.Card"/> 用**純矩形**：它的角是 45° 斜切，offset 到 15.6
+    /// 會把線帶到 Rect 外面去。而且矩形的金線正是讓 `Pad` 從 38 降到 20 的那一步。
+    ///
+    /// <see cref="PlaqueShape.Badge"/> 的是兩件：一個**左邊開口**的規線框（刻版的邊
+    /// 線碰到浮雕就停），加上一圈繞著頭的圓 —— 同一條線彎過去當肖像的 bezel。順手修
+    /// 掉一個出貨中的缺陷：六角形的金線目前壓過 78 的肖像 1.3 單位，只是被印章蓋住
+    /// 才看不到；改成半徑 42.4 之後對 39 的肖像有 3.4 的真淨空。
+    /// </remarks>
+    private void Hairline(VertexHelper vh, Rect r, Vector2 centre, Vector2[] rim, Color gilt)
+    {
+        Color line = new Color(gilt.r, gilt.g, gilt.b, 0.55f);
+        PlaqueShape profile = plate.Profile;
+        if (profile == PlaqueShape.Card)
+        {
+            Band(vh, Rectangle(r, RuleOuter), Rectangle(r, RuleInner), line);
+            return;
+        }
+        if (profile == PlaqueShape.Badge)
+        {
+            float hx = r.xMin + r.height * 0.5f + 1f;
+            float cy = r.center.y;
+            // 規線框：上、下、右三段，左邊讓給圓。x 從頭的右側 49 起算。
+            float left = hx + 49f;
+            Strip(vh, left, r.xMax - RuleInner, r.yMax - RuleInner, r.yMax - RuleOuter, line);
+            Strip(vh, left, r.xMax - RuleInner, r.yMin + RuleOuter, r.yMin + RuleInner, line);
+            Strip(vh, r.xMax - RuleInner, r.xMax - RuleOuter,
+                r.yMin + RuleOuter, r.yMax - RuleOuter, line);
+            Band(vh, Circle(hx, cy, 44f, 24), Circle(hx, cy, 42.4f, 24), line);
+            return;
+        }
+        Band(vh, Silhouette.Offset(rim, centre, -RuleOuter),
+            Silhouette.Offset(rim, centre, -RuleInner), line);
+    }
+
+    private static Vector2[] Rectangle(Rect r, float inset)
+    {
+        return new[]
+        {
+            new Vector2(r.xMin + inset, r.yMax - inset), new Vector2(r.xMax - inset, r.yMax - inset),
+            new Vector2(r.xMax - inset, r.yMin + inset), new Vector2(r.xMin + inset, r.yMin + inset)
+        };
+    }
+
+    private static Vector2[] Circle(float cx, float cy, float radius, int segments)
+    {
+        var points = new Vector2[segments];
+        for (int i = 0; i < segments; i++)
+        {
+            float angle = Mathf.PI * 2f * i / segments;
+            points[i] = new Vector2(cx + radius * Mathf.Cos(angle), cy + radius * Mathf.Sin(angle));
+        }
+        return points;
+    }
+
+    private static void Band(VertexHelper vh, Vector2[] outer, Vector2[] inner, Color colour)
+    {
+        int count = Mathf.Min(outer.Length, inner.Length);
+        for (int i = 0; i < count; i++)
+        {
+            int next = (i + 1) % count;
+            AddQuad(vh, outer[i], outer[next], inner[next], inner[i], colour);
+        }
+    }
+
+    private static void Strip(VertexHelper vh, float x0, float x1, float y0, float y1, Color colour)
+    {
+        AddQuad(vh, new Vector2(x0, y1), new Vector2(x1, y1),
+            new Vector2(x1, y0), new Vector2(x0, y0), colour);
+    }
+
+    private static void AddQuad(VertexHelper vh, Vector2 p0, Vector2 p1, Vector2 p2, Vector2 p3,
+        Color colour)
+    {
+        AddQuad(vh, p0, p1, p2, p3, colour, colour, colour, colour);
+    }
+
+    private static void AddQuad(VertexHelper vh, Vector2 p0, Vector2 p1, Vector2 p2, Vector2 p3,
+        Color c0, Color c1, Color c2, Color c3)
+    {
+        int index = vh.currentVertCount;
+        AddVertex(vh, p0, c0);
+        AddVertex(vh, p1, c1);
+        AddVertex(vh, p2, c2);
+        AddVertex(vh, p3, c3);
+        vh.AddTriangle(index, index + 1, index + 2);
+        vh.AddTriangle(index + 2, index + 3, index);
+    }
+
+    /// <summary>把一個顏色乘上受光量，alpha 不動。</summary>
+    private static Color Tone(Color colour, float lit)
+    {
+        return new Color(colour.r * lit, colour.g * lit, colour.b * lit, colour.a);
+    }
+
+    private static void AddVertex(VertexHelper vh, Vector2 position, Color colour)
+    {
+        UIVertex vertex = UIVertex.simpleVert;
+        vertex.position = position;
+        vertex.color = colour;
+        vh.AddVert(vertex);
+    }
+
+}
+
 /// <summary>
 /// One difficulty stone: a white hexagonal setting with a cut hexagonal gem in
 /// it, and the tier's name across the bottom.
@@ -628,27 +1118,48 @@ internal sealed class GemGraphic : MaskableGraphic
 {
     private static readonly Vector2 Light = new Vector2(-0.5f, 0.87f);
 
+    /// <summary>
+    /// 沒被選到的那幾顆有多暗。整塊牌子只有這一個「沒選到」的量。
+    /// </summary>
+    /// <remarks>
+    /// 以前石身寫 0.58、等級數字另外寫 0.5，兩個數字在講同一件事卻不一樣；改一邊
+    /// 就會忘記另一邊。名字的 0.55 也一併收進來 —— 差那 0.03 沒有人分得出來，但多
+    /// 一個數字就多一個會走樣的地方。
+    /// </remarks>
+    internal const float UnselectedAlpha = 0.58f;
+
+    /// <summary>這首歌沒有的那一階：照樣畫出來，但是整顆收起來。</summary>
+    internal const float MutedAlpha = 0.40f;
+
     private Color tint = new Color(0.62f, 0.32f, 0.84f, 1f);
     private string caption = string.Empty;
     private bool muted;
-    private bool selected = true;
+    private float glow = 1f;
     private TextMeshProUGUI captionLabel;
 
     /// <summary>
-    /// The stone whose record is on show. The others are turned down.
+    /// 這顆石頭有多亮：0 是沒被選到、1 是現在選的那一階，滑過時再往上一點。
     /// </summary>
     /// <remarks>
     /// Dimmed rather than outlined: an outline is one more shape on a plaque
     /// that already has five stones and a score, and brightness is the one
     /// channel nothing else here is using.
+    ///
+    /// **為什麼是浮點數而不是 bool。** 本來是布林值，於是點另一顆寶石時「舊的暗下
+    /// 去」和「新的亮起來」發生在同一幀 —— 畫面只是換了一張圖，沒有任何東西把玩家
+    /// 剛剛的手指和亮起來的那一顆連起來。改成連續值，交接才補得出來（由
+    /// <see cref="GemGlow"/> 驅動）。選取本身仍然是當下就改好的，動的只有畫面。
+    ///
+    /// 可以大於 1：滑過會再加一點點，那一段剩餘量只餵給星芒 —— alpha 到 1 就飽和
+    /// 了，已經選中的那一顆若只看 alpha 就會對滑過毫無反應。
     /// </remarks>
-    public bool Selected
+    public float Glow
     {
-        get => selected;
+        get => glow;
         set
         {
-            if (selected == value) return;
-            selected = value;
+            if (Mathf.Approximately(glow, value)) return;
+            glow = value;
             SetVerticesDirty();
             ApplyCaption();
         }
@@ -719,7 +1230,7 @@ internal sealed class GemGraphic : MaskableGraphic
         Rect r = rectTransform.rect;
         if (r.width <= 8f || r.height <= 8f) return;
 
-        float alpha = muted ? 0.40f : selected ? 1f : 0.58f;
+        float alpha = muted ? MutedAlpha : Mathf.Lerp(UnselectedAlpha, 1f, Mathf.Clamp01(glow));
         Vector2 centre = new Vector2(r.center.x, r.center.y + r.height * 0.06f);
         float halfWidth = r.width * 0.5f;
         float halfHeight = r.height * 0.42f;
@@ -743,11 +1254,20 @@ internal sealed class GemGraphic : MaskableGraphic
     /// <summary>
     /// The white metal the stone sits in: a rim, lit from the upper left.
     /// </summary>
+    /// <remarks>
+    /// 只有最外面這一圈羽化。石頭內部那些切面之間的硬跳接是刻意的 —— 相鄰的面要
+    /// 像兩面朝向不同的鏡子，一柔化就變回一塊有漸層的彩色磁磚。會爬階梯的是輪廓，
+    /// 不是切面。
+    /// </remarks>
     private void DrawBezel(VertexHelper vh, Vector2 centre, float halfWidth, float halfHeight,
         float alpha)
     {
-        Vector2[] outer = Hexagon(centre, halfWidth, halfHeight, 0f);
+        Vector2[] rim = Hexagon(centre, halfWidth, halfHeight, 0f);
         Vector2[] inner = Hexagon(centre, halfWidth * 0.88f, halfHeight * 0.88f, 0f);
+        // 實心收進半格、外面補一條收到透明的裙擺：輪廓的位置和墨量都沒變，但邊是
+        // 連續的。
+        Vector2[] outer = Silhouette.Offset(rim, centre, -0.5f);
+        Vector2[] skirt = Silhouette.Offset(rim, centre, 0.5f);
         Color silver = new Color(0.93f, 0.92f, 0.90f, 1f);
 
         for (int i = 0; i < 6; i++)
@@ -769,6 +1289,9 @@ internal sealed class GemGraphic : MaskableGraphic
             AddVertex(vh, inner[i], lip);
             vh.AddTriangle(first, first + 1, first + 2);
             vh.AddTriangle(first + 2, first + 3, first);
+
+            // 裙擺接的是這一段自己的顏色，六段的明暗才不會在輪廓上錯開。
+            Silhouette.Ramp(vh, outer[i], outer[next], skirt[i], skirt[next], face);
         }
     }
 
@@ -866,8 +1389,14 @@ internal sealed class GemGraphic : MaskableGraphic
     {
         if (muted) return;
         Vector2 at = centre + new Vector2(Light.x * girdleW * 0.62f, Light.y * girdleH * 0.62f);
-        float arm = girdleW * (selected ? 0.42f : 0.26f);
-        Color hot = new Color(1f, 1f, 0.98f, (selected ? 0.9f : 0.5f) * alpha);
+        // 星芒吃的是沒夾過的 glow：滑過已經選中的那一顆時，alpha 早就到頂了，能動的
+        // 只剩這道光 —— 長一點、亮一點，就是「你指著的是這顆」的全部回饋。
+        // 一定要用 LerpUnclamped：Mathf.Lerp 會把 t 夾在 0..1，而這裡整個設計就
+        // 是「glow 可以超過 1，超出的那一段只餵給星芒」—— 用夾過的版本等於滑過已
+        // 經選中的那一顆時一個像素都不會變。
+        float arm = girdleW * Mathf.LerpUnclamped(0.26f, 0.42f, glow);
+        Color hot = new Color(1f, 1f, 0.98f,
+            Mathf.Clamp01(Mathf.LerpUnclamped(0.5f, 0.9f, glow)) * alpha);
         Color clear = new Color(1f, 1f, 0.98f, 0f);
 
         AddSpike(vh, at, new Vector2(arm, 0f), arm * 0.10f, hot, clear);
@@ -989,13 +1518,279 @@ internal sealed class GemGraphic : MaskableGraphic
             captionLabel.raycastTarget = false;
         }
 
-        captionLabel.text = caption;
+        // 亮度每一幀都在動，字卻幾乎不變：照樣指派會讓 TMP 每一幀重排一次版面。
+        if (captionLabel.text != caption) captionLabel.text = caption;
         Color ink = Color.Lerp(tint, Color.white, 0.86f);
-        ink.a = muted ? 0.40f : selected ? 1f : 0.55f;
+        ink.a = muted ? MutedAlpha : Mathf.Lerp(UnselectedAlpha, 1f, Mathf.Clamp01(glow));
         captionLabel.color = ink;
     }
 
     private static void AddVertex(VertexHelper vh, Vector2 position, Color colour)
+    {
+        UIVertex vertex = UIVertex.simpleVert;
+        vertex.position = position;
+        vertex.color = colour;
+        vh.AddVert(vertex);
+    }
+}
+
+/// <summary>
+/// 一顆寶石的亮度：被選中、被滑過，以及兩者之間的那一段。
+/// </summary>
+/// <remarks>
+/// **為什麼手感不放在 Button 上。** `Selectable` 的每一種 transition 都要有東西可
+/// 以換：`ColorTint` 寫的是 `targetGraphic.color`，`SpriteSwap` 要圖，`Animation`
+/// 要 Animator。寶石的每一個切面都是 `OnPopulateMesh` 當場算出來的，`color` 對它
+/// 完全沒有作用 —— 所以那顆 Button 的 transition 維持 `None`，亮度自己管。
+///
+/// **為什麼要補一段過場。** 點另一顆石頭時，舊的暗下去和新的亮起來本來發生在同一
+/// 幀：畫面只是換了一張圖，沒有任何東西把玩家剛剛按下的位置和亮起來的那一顆連起
+/// 來。180ms 的交叉淡入就是那條線；滑過的 120ms 則短得多，因為那一段是在回應手，
+/// 不是在說明狀態。
+/// </remarks>
+internal sealed class GemGlow : UIBehaviour, IPointerEnterHandler, IPointerExitHandler
+{
+    /// <summary>選取交接的長度。</summary>
+    private const float SelectSeconds = 0.18f;
+
+    /// <summary>滑過的長度。比選取短 —— 回應手的動作慢了就像卡住。</summary>
+    private const float HoverSeconds = 0.12f;
+
+    /// <summary>
+    /// 滑過在選取之上再加的亮度。看得出「這顆點得下去」，又不會被誤讀成已經選中。
+    /// </summary>
+    private const float HoverLift = 0.18f;
+
+    /// <summary>
+    /// 一段有終點的緩出。
+    /// </summary>
+    /// <remarks>
+    /// 存的是**畫出來的值**，換方向時從它接著走。存目標值的話，一段還沒走完就被反
+    /// 轉（在五顆石頭之間連點就會）會當場跳一格。
+    ///
+    /// 剩餘時間用倒數而不是累加：struct 的預設值全是 0，用累加的話「0」同時代表
+    /// 「剛開始」和「沒在動」，一顆還沒被設定過的石頭會自己空轉一段。
+    /// </remarks>
+    private struct Ease
+    {
+        public float value;
+        private float from;
+        private float target;
+        private float left;
+        private float span;
+
+        public void Snap(float to)
+        {
+            value = from = target = to;
+            left = 0f;
+            span = 0f;
+        }
+
+        /// <summary>補間停在半路時直接跳到終點。</summary>
+        public void Settle()
+        {
+            if (left > 0f) Snap(target);
+        }
+
+        public void Aim(float to, float seconds)
+        {
+            // 已經停在那裡、或已經正往那裡走，就不要重新起算 —— 每一幀重設的話補間
+            // 永遠停在第一格，看起來像卡死。
+            if (Mathf.Approximately(left > 0f ? target : value, to)) return;
+            from = value;
+            target = to;
+            span = Mathf.Max(0.0001f, seconds);
+            left = span;
+        }
+
+        /// <summary>往前走一格，回傳這一格有沒有動。</summary>
+        public bool Step(float delta)
+        {
+            if (left <= 0f) return false;
+            left -= delta;
+            if (left <= 0f)
+            {
+                // 明確收在終點，而不是無止境地趨近。
+                value = target;
+                left = 0f;
+                return true;
+            }
+
+            float t = 1f - left / span;
+            value = Mathf.Lerp(from, target, 1f - Mathf.Pow(1f - t, 3f));
+            return true;
+        }
+    }
+
+    private GemGraphic gem;
+    private Ease select;
+    private Ease hover;
+    private bool available = true;
+    private bool hovering;
+    private bool settled;
+
+    /// <summary>
+    /// 現找而不是在建的時候綁進來：側邊那兩張卡是 Instantiate 複製出去的，執行期綁
+    /// 上的參照在複製品上會全部是 null，然後這裡第一行就靜靜地跳出去。
+    /// </summary>
+    private GemGraphic Stone => gem != null ? gem : (gem = GetComponent<GemGraphic>());
+
+    /// <summary>
+    /// 這一格是不是這首歌有的難度、以及是不是現在選的那一階。
+    /// </summary>
+    /// <remarks>
+    /// 第一次不補間：牌子一出現就該已經是對的，淡進來會讓人以為畫面還沒載完。
+    /// </remarks>
+    public void Set(bool present, bool chosen)
+    {
+        available = present;
+        float lit = present && chosen ? 1f : 0f;
+        if (settled)
+        {
+            select.Aim(lit, SelectSeconds);
+        }
+        else
+        {
+            settled = true;
+            select.Snap(lit);
+        }
+
+        // 這首沒有的難度按不下去，就不要亮得像按得下去；反過來，游標本來就停在這一
+        // 格、換一首之後這一階才出現的話，亮度要補上 —— 游標沒動，uGUI 不會再送一
+        // 次 OnPointerEnter。
+        if (!present) hovering = false;
+        hover.Aim(hovering ? 1f : 0f, HoverSeconds);
+        Apply();
+    }
+
+    public void OnPointerEnter(PointerEventData eventData)
+    {
+        hovering = available;
+        if (hovering) hover.Aim(1f, HoverSeconds);
+    }
+
+    public void OnPointerExit(PointerEventData eventData)
+    {
+        hovering = false;
+        hover.Aim(0f, HoverSeconds);
+    }
+
+    /// <summary>
+    /// 卡片重新出現時直接歸位。
+    /// </summary>
+    /// <remarks>
+    /// 物件被停用的期間 Update 不會跑，補間就停在半路。再出現時要講的是「現在是哪
+    /// 一階」這個事實，不是把那半段演完。
+    /// </remarks>
+    protected override void OnEnable()
+    {
+        base.OnEnable();
+        select.Settle();
+        hover.Snap(0f);
+        Apply();
+    }
+
+    /// <summary>
+    /// 被收起來時把滑過的亮度歸零。
+    /// </summary>
+    /// <remarks>
+    /// 物件被停用時 uGUI 不會補送 OnPointerExit —— 不自己清的話，下次這張卡再出
+    /// 現，會有一顆無緣無故亮著的石頭，而游標根本不在上面。
+    /// </remarks>
+    protected override void OnDisable()
+    {
+        base.OnDisable();
+        hovering = false;
+        hover.Snap(0f);
+        Apply();
+    }
+
+    private void Update()
+    {
+        float delta = Time.unscaledDeltaTime;
+        bool moved = select.Step(delta);
+        // 兩段都要走完，所以是 |= 不是 ||：後者會在前一段還在動時跳過這一段。
+        moved |= hover.Step(delta);
+        if (moved) Apply();
+    }
+
+    private void Apply()
+    {
+        GemGraphic stone = Stone;
+        if (stone != null) stone.Glow = select.value + hover.value * HoverLift;
+    }
+}
+
+/// <summary>
+/// 把一個多邊形的**外輪廓**羽化掉的兩個工具。
+/// </summary>
+/// <remarks>
+/// 專案沒開 MSAA（PC_RPAsset 的 m_MSAA: 1），而選歌輪播每一幀都在改卡片的縮放，所
+/// 以硬邊的斜線會整條爬階梯 —— 階梯比線本身還顯眼。BPM 圖（ChartBpmGraphic）和練
+/// 習室的曲線（PracticeRoomScreen.AddLine）早就是這樣畫的，這裡只是把同一招用在封
+/// 閉的形狀上：實心往內收半格、外面補一圈 alpha 收到 0 的裙擺，輪廓的位置和墨量都
+/// 不變，但邊是連續的。
+/// </remarks>
+internal static class Silhouette
+{
+    /// <summary>
+    /// 把一圈點沿著外法線推出 <paramref name="distance"/>（負數是往內縮）。
+    /// </summary>
+    /// <remarks>
+    /// 不是把半徑加上一個值就算了：這裡的六角形被壓扁過（寬高不一樣），等比放大在
+    /// 每一條邊上量到的垂直距離都不同，裙擺會一邊粗一邊細。
+    ///
+    /// 朝外是哪一邊用中心點判斷，不看繞向 —— 這個檔案裡兩個六角形一個順時針一個逆
+    /// 時針，寫死法線方向的話其中一個的裙擺會長到形狀裡面去，把邊緣啃掉一圈。
+    /// </remarks>
+    internal static Vector2[] Offset(Vector2[] ring, Vector2 centre, float distance)
+    {
+        var moved = new Vector2[ring.Length];
+        for (int i = 0; i < ring.Length; i++)
+        {
+            Vector2 back = EdgeNormal(ring[(i + ring.Length - 1) % ring.Length], ring[i], centre);
+            Vector2 ahead = EdgeNormal(ring[i], ring[(i + 1) % ring.Length], centre);
+            Vector2 bisector = back + ahead;
+            if (bisector.sqrMagnitude < 1e-6f)
+            {
+                moved[i] = ring[i] + ahead * distance;
+                continue;
+            }
+
+            bisector.Normalize();
+            // 轉角要推得比邊上遠一點（除以夾角的餘弦），兩條邊各自量到的垂直距離才
+            // 都剛好是 distance；直接推 distance 的話，角會被削掉一小塊。
+            float lean = Mathf.Max(0.35f, Vector2.Dot(bisector, ahead));
+            moved[i] = ring[i] + bisector * (distance / lean);
+        }
+
+        return moved;
+    }
+
+    /// <summary>實心的外緣接上一條收到透明的帶子。</summary>
+    internal static void Ramp(VertexHelper vh, Vector2 fromInner, Vector2 toInner,
+        Vector2 fromOuter, Vector2 toOuter, Color colour)
+    {
+        Color clear = new Color(colour.r, colour.g, colour.b, 0f);
+        int first = vh.currentVertCount;
+        Add(vh, fromInner, colour);
+        Add(vh, toInner, colour);
+        Add(vh, toOuter, clear);
+        Add(vh, fromOuter, clear);
+        vh.AddTriangle(first, first + 1, first + 2);
+        vh.AddTriangle(first + 2, first + 3, first);
+    }
+
+    private static Vector2 EdgeNormal(Vector2 from, Vector2 to, Vector2 centre)
+    {
+        Vector2 direction = to - from;
+        if (direction.sqrMagnitude < 1e-6f) return Vector2.zero;
+        Vector2 normal = new Vector2(direction.y, -direction.x).normalized;
+        if (Vector2.Dot(normal, (from + to) * 0.5f - centre) < 0f) normal = -normal;
+        return normal;
+    }
+
+    private static void Add(VertexHelper vh, Vector2 position, Color colour)
     {
         UIVertex vertex = UIVertex.simpleVert;
         vertex.position = position;

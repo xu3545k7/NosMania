@@ -203,6 +203,19 @@ public static class SettingsUiKit
         return sprite;
     }
 
+    /// <summary>練習室的紙面：圓角、反鋸齒、上亮下暗的漫射。</summary>
+    /// <remarks>
+    /// border 是 12 不是更大 —— 九宮格兩側的 border 相加不能超過元件的短邊，而這
+    /// 個畫面最小的元件是 34×34 的箭頭鈕（12+12 = 24 < 34）。
+    ///
+    /// 面幾乎是白的（0.93–0.985），因為顏色是呼叫端用 tint 給的；上下那點差是漫射
+    /// 的明暗。上緣不給滿 1.0 是為了留給 hover：按鈕底色壓暗 8% 再乘回來，滿 1.0
+    /// 會在上緣被夾掉，hover 在卡片上半部就消失了。
+    /// </remarks>
+    public static Sprite PracticePaperSprite() => Rounded("PracticePaper", 64, 10f, 12,
+        new Color(0.985f, 0.985f, 0.985f, 1f), new Color(0.930f, 0.920f, 0.898f, 1f),
+        0f, Color.clear, Color.clear, 0f, Color.clear, 0f);
+
     /// <summary>
     /// 圓角矩形的九宮格貼圖：上下漸層的面、受光方向決定亮暗的邊、內側一道線。
     /// </summary>

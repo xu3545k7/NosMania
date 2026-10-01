@@ -46,6 +46,7 @@ public sealed class SongGroupingBar
     private readonly List<string> entries = new List<string>();
     private readonly List<Button> modeOptionButtons = new List<Button>();
     private readonly List<TextMeshProUGUI> modeOptionLabels = new List<TextMeshProUGUI>();
+    private readonly List<CheckMarkGraphic> modeOptionTicks = new List<CheckMarkGraphic>();
     private readonly List<SongGroupingMode> optionModes = new List<SongGroupingMode>();
 
     private RectTransform frame;
@@ -154,7 +155,7 @@ public sealed class SongGroupingBar
 
         songPositionLabel = songPositionRoot.gameObject.AddComponent<TextMeshProUGUI>();
         songPositionLabel.alignment = TextAlignmentOptions.Center;
-        songPositionLabel.fontSize = 16f;
+        songPositionLabel.fontSize = 14f;
         songPositionLabel.fontStyle = FontStyles.Bold;
         songPositionLabel.color = ClassicalBookUITheme.AgedPaper;
         songPositionLabel.raycastTarget = false;
@@ -167,30 +168,45 @@ public sealed class SongGroupingBar
         if (parent == null) return;
 
         modeButtonRoot = CreateChild(parent, "GroupingModeButton");
-        modeButtonRoot.anchorMin = new Vector2(0.145f, 1f);
-        modeButtonRoot.anchorMax = new Vector2(0.292f, 1f);
-        modeButtonRoot.pivot = frame.pivot;
-        modeButtonRoot.anchoredPosition = frame.anchoredPosition;
-        modeButtonRoot.sizeDelta = new Vector2(0f, frame.sizeDelta.y);
+        // 分類槽是固定 1180 寬的一條，分組鈕貼在它左邊。分數錨點在寬螢幕上會把這顆
+        // 推到槽外面去，所以用固定值。
+        //
+        // −684 不是 −614：分類的「‹」已經從槽裡搬到槽外，佔掉 −669..−604，而這顆鈕
+        // 從 −614 起算就正好壓在它上面 —— 實機上左箭頭整顆看不見。往左讓 70，留 15
+        // 的縫。（原本的 −614 是為了和右邊的演奏會開關對稱，而那顆開關已經退場。）
+        modeButtonRoot.anchorMin = new Vector2(0.5f, 1f);
+        modeButtonRoot.anchorMax = new Vector2(0.5f, 1f);
+        modeButtonRoot.pivot = new Vector2(1f, 1f);
+        // 改成一顆漏斗：「音樂類型」這四個字只是在說「這是一個篩選器」，
+        // 而漏斗圖示說的是同一件事、只要四分之一的寬度。目前選了哪一個
+        // 在下拉選單裡用勾勾標記，不必写在鈕上。
+        // 跟著槽的寬度走：槽半寬 320，左箭頭占 −365..−325，漏斗緊貼在它外面。
+        modeButtonRoot.anchoredPosition = new Vector2(-375f, frame.anchoredPosition.y);
+        modeButtonRoot.sizeDelta = new Vector2(52f, frame.sizeDelta.y);
 
         var buttonImage = modeButtonRoot.gameObject.AddComponent<Image>();
         ClassicalBookUITheme.StylePlate(buttonImage, false);
 
+        RectTransform iconRoot = CreateChild(modeButtonRoot, "Funnel");
+        iconRoot.anchorMin = new Vector2(0.5f, 0.5f);
+        iconRoot.anchorMax = new Vector2(0.5f, 0.5f);
+        iconRoot.pivot = new Vector2(0.5f, 0.5f);
+        iconRoot.anchoredPosition = Vector2.zero;
+        iconRoot.sizeDelta = new Vector2(22f, 24f);
+        var funnel = iconRoot.gameObject.AddComponent<FunnelIconGraphic>();
+        funnel.color = ClassicalBookUITheme.ParchmentLight;
+        funnel.raycastTarget = false;
+
+        // 標籤還在，只是不上場：<c>UpdateModeButtonCaption</c> 和本地化都會寫它，
+        // 拿掉的話那兩條路都要跘空指標。
         RectTransform captionRoot = CreateChild(modeButtonRoot, "Label");
         captionRoot.anchorMin = Vector2.zero;
         captionRoot.anchorMax = Vector2.one;
-        captionRoot.offsetMin = new Vector2(8f, 4f);
-        captionRoot.offsetMax = new Vector2(-8f, -4f);
+        captionRoot.offsetMin = Vector2.zero;
+        captionRoot.offsetMax = Vector2.zero;
         modeButtonLabel = captionRoot.gameObject.AddComponent<TextMeshProUGUI>();
-        modeButtonLabel.alignment = TextAlignmentOptions.Center;
-        modeButtonLabel.enableAutoSizing = true;
-        modeButtonLabel.fontSizeMin = 12f;
-        modeButtonLabel.fontSizeMax = 19f;
-        modeButtonLabel.enableWordWrapping = false;
-        modeButtonLabel.fontStyle = FontStyles.Bold;
-        modeButtonLabel.color = ClassicalBookUITheme.ParchmentLight;
         modeButtonLabel.raycastTarget = false;
-        ClassicalBookUITheme.ApplyLocalizedFont(modeButtonLabel);
+        captionRoot.gameObject.SetActive(false);
 
         var button = modeButtonRoot.gameObject.AddComponent<Button>();
         button.targetGraphic = buttonImage;
@@ -210,14 +226,14 @@ public sealed class SongGroupingBar
         popupRoot = CreateChild(parent, "GroupingModePopup");
         popupRoot.anchorMin = modeButtonRoot.anchorMin;
         popupRoot.anchorMax = modeButtonRoot.anchorMax;
-        popupRoot.pivot = new Vector2(0.5f, 1f);
+        // 和鈕同一個樞紐。(0.5,1) 配上鈕的 (1,1)，選單會橫移半個寬。
+        popupRoot.pivot = modeButtonRoot.pivot;
         popupRoot.anchoredPosition = modeButtonRoot.anchoredPosition +
             new Vector2(0f, -frame.sizeDelta.y - 6f);
 
         var background = popupRoot.gameObject.AddComponent<Image>();
-        background.sprite = ClassicalBookUITheme.GetPaperTextureSprite();
-        background.type = Image.Type.Tiled;
-        background.color = new Color(0.13f, 0.06f, 0.03f, 0.99f);
+        ClassicalBookUITheme.ApplyDarkSurface(background,
+            new Color(0.13f, 0.06f, 0.03f, 0.99f), ClassicalBookUITheme.Surface.Paper, 4f);
         var outline = popupRoot.gameObject.AddComponent<Outline>();
         outline.effectColor = ClassicalBookUITheme.Gold;
         outline.effectDistance = new Vector2(2f, -2f);
@@ -247,12 +263,13 @@ public sealed class SongGroupingBar
             RectTransform optionLabelRoot = CreateChild(optionRoot, "Label");
             optionLabelRoot.anchorMin = Vector2.zero;
             optionLabelRoot.anchorMax = Vector2.one;
+            // 右邊留 26 給勾勾：標籤居中而勾勾靠右，兩個搶位置的話長名字會壓上去。
             optionLabelRoot.offsetMin = new Vector2(10f, 0f);
-            optionLabelRoot.offsetMax = new Vector2(-10f, 0f);
+            optionLabelRoot.offsetMax = new Vector2(-26f, 0f);
             var optionLabel = optionLabelRoot.gameObject.AddComponent<TextMeshProUGUI>();
             optionLabel.text = DescribeMode(mode);
             optionLabel.alignment = TextAlignmentOptions.Center;
-            optionLabel.fontSize = 17f;
+            optionLabel.fontSize = 15f;
             optionLabel.fontStyle = FontStyles.Bold;
             optionLabel.color = ClassicalBookUITheme.ParchmentLight;
             optionLabel.raycastTarget = false;
@@ -268,12 +285,30 @@ public sealed class SongGroupingBar
             optionButton.colors = optionColors;
             SongGroupingMode captured = mode;
             optionButton.onClick.AddListener(() => SelectMode(captured));
+            RectTransform tickRoot = CreateChild(optionRoot, "Tick");
+            tickRoot.anchorMin = new Vector2(1f, 0.5f);
+            tickRoot.anchorMax = new Vector2(1f, 0.5f);
+            tickRoot.pivot = new Vector2(1f, 0.5f);
+            tickRoot.anchoredPosition = new Vector2(-8f, 0f);
+            tickRoot.sizeDelta = new Vector2(16f, 16f);
+            var tick = tickRoot.gameObject.AddComponent<CheckMarkGraphic>();
+            tick.color = ClassicalBookUITheme.Gold;
+            tick.raycastTarget = false;
+
             modeOptionButtons.Add(optionButton);
             modeOptionLabels.Add(optionLabel);
+            modeOptionTicks.Add(tick);
             optionModes.Add(mode);
         }
 
-        popupRoot.sizeDelta = new Vector2(0f, modes.Length * 42f + 12f);
+        // **寬度不能留 0。**
+        //
+        // popupRoot 複製了鈕的錯點 (0.5,1)/(0.5,1) —— 零尺寸錯點，所以 sizeDelta
+        // 就是實際尺寸，而這裡只給了高。寬 0 的 VerticalLayoutGroup 把每一個選項
+        // 壓成 0 寬，標籤就一個字一行往下排 —— 實機上看到的是一條直的字。
+        // 這行應該是在鈕還是拉伸錯點的年代寫的，鈕改成固定寬之後就沒人跟著改。
+        popupRoot.sizeDelta =
+            new Vector2(modeButtonRoot.sizeDelta.x, modes.Length * 42f + 12f);
         popupRoot.gameObject.SetActive(false);
         RefreshOptionHighlight();
     }
@@ -285,9 +320,14 @@ public sealed class SongGroupingBar
         {
             var graphic = modeOptionButtons[i].targetGraphic as Image;
             if (graphic == null) continue;
-            graphic.color = optionModes[i] == Mode
+            bool current = optionModes[i] == Mode;
+            graphic.color = current
                 ? new Color(0.46f, 0.22f, 0.09f, 1f)
                 : new Color(0.30f, 0.115f, 0.085f, 1f);
+            // 勾勾是該選項是不是目前這一個的唯一記號 —— 底色的差別在深色選單
+            // 上太微弱，靠它一個人讀不出來。
+            if (i < modeOptionTicks.Count && modeOptionTicks[i] != null)
+                modeOptionTicks[i].gameObject.SetActive(current);
         }
     }
 

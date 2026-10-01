@@ -280,6 +280,7 @@ public class GameManager : MonoBehaviour // Renamed class to match file name "Ga
         else
         {
             float defaultSpeed = SettingsManager.Instance != null ? SettingsManager.Instance.DefaultSpeed : 30f;
+            defaultSpeed = ScrollSpeedForCurrentChart(defaultSpeed);
             if (NoteSpawner != null) NoteSpawner.speed = defaultSpeed;
             if (BeatLineSpawner != null) BeatLineSpawner.Speed = defaultSpeed;
         }
@@ -1095,6 +1096,7 @@ public class GameManager : MonoBehaviour // Renamed class to match file name "Ga
         {
             // As a fallback (UIManager not present), apply DefaultSpeed directly to spawners
             float defaultSpeed = SettingsManager.Instance != null ? SettingsManager.Instance.DefaultSpeed : 30f;
+            defaultSpeed = ScrollSpeedForCurrentChart(defaultSpeed);
             if (NoteSpawner != null)
             {
                 NoteSpawner.speed = defaultSpeed;
@@ -3049,4 +3051,22 @@ public class GameManager : MonoBehaviour // Renamed class to match file name "Ga
             // Auto-resize disabled to avoid unexpected overrides -- user may set JudgmentLine size manually in scene
         }
     }
+
+    /// <summary>
+    /// 設定的流速套上這份譜的比例。
+    /// </summary>
+    /// <remarks>
+    /// 固定的單位/秒是按時間走的，而可讀性是由**畫面上同時有幾個音符**決定
+    /// 的 —— 見 <see cref="ChartScrollSpeed"/>。設定裡關掉就回到舊行為。
+    ///
+    /// **和 BPM 無關。** 這裡不讀 <c>first_bpm</c>、不讀拍點表、也不碰
+    /// <c>ChartTempo</c>；完全只看音符落在時間軸上的密度。
+    /// </remarks>
+    private float ScrollSpeedForCurrentChart(float requested)
+    {
+        var settings = SettingsManager.Instance;
+        if (settings != null && !settings.DensityScaledScroll) return requested;
+        return ChartScrollSpeed.Resolve(CurrentChart, requested);
+    }
+
 }
